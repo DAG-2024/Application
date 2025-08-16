@@ -1,0 +1,25 @@
+# Core dependencies for the main project
+whisperx
+torch
+librosa
+numpy
+openai
+python-dotenv
+
+# Stitcher dependencies
+fastapi
+pydantic
+ffmpeg-python
+requests
+uvicorn
+
+# Optional dependencies for unused modules (commented out)
+# speechbrain>=0.5.0
+# torchaudio>=2.0.0
+# voicefixer>=0.1.0
+# language-tool-python>=2.7.0
+# transformers>=4.20.0
+# scikit-learn>=1.0.0
+# TTS>=0.8.0
+# soundfile>=0.10.0
+# datasets>=2.0.0
