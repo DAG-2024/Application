@@ -133,48 +133,69 @@ def insert_blank_and_modify_timestamp(whisper_res, indexes):
         # Optional: skip edge cases (first or last word) silently
     return all_words
 
-
 def main():
-    audio_path = "input/Audio test samples/HARVARD- CS LECTURE/masked/masked-cs-snippet.wav"
+    # ---- Config -------------------------------------------------------------
+    AUDIO_PATH = "input/Audio test samples/HARVARD- CS LECTURE/masked/masked-cs-snippet.wav"
+    CONF_THRESH = 0.3
+    USE_LOW_CONF_INTERSECTION = True   # if False → blank ALL anomaly indexes
+    USE_NOISE_MASKING = True           # apply loud-noise masking after anomaly masking
+    # ------------------------------------------------------------------------
     
-    
-    whisper_result = transcribe(audio_path)
-    whisper_transcription= segments_to_transcription(whisper_result)
+    # 1) Transcribe
+    whisper_result = transcribe(AUDIO_PATH)
+    whisper_transcription = segments_to_transcription(whisper_result)
     indexed_transcription = indexed_transcription_str(whisper_transcription)
-
-    print("\n\n\n\n#### INITIAL WHISPER TRANSCRIPTION #### \n")
-    print(whisper_transcription)
-
-    #LLM call using a tailored system prompt for the task
-    anomaly_detector_result = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
-    parsed_anomaly_detection_result = anomaly_detector_result.choices[0].message.content
-
-    # detect high energy audio segments
-    energy_segments = detect_energy(audio_path)
-
-    print("\n\n\n #### TOOLS USED #### \n")
-
-    print_loud_noise_segments(energy_segments)
-    print("\n")
-    print("Anomaly detection indexes: " ,parsed_anomaly_detection_result)
-    print("\n")
-    print_low_confidence_words(whisper_result, 0.3)
-
     
-    #Insert placeholders to the transcription using the context anomally resulst and verify with loud segments time intervals
-    indices_list = parse_indices_string(parsed_anomaly_detection_result)
-    modified_transcription = insert_blank_and_modify_timestamp(whisper_result, indices_list)
-    result = adjust_by_noise_segments(modified_transcription, energy_segments)   #
-    blank_inserted_trans = ' '.join(word['word'] for word in result)
-
-    print("\n\n\n #### FINAL TRANSCRIPTION WITH DETECTION PLACEHOLDERS #### \n")
-    print(blank_inserted_trans)
-
+    print("\n==== INITIAL WHISPER TRANSCRIPTION ====\n")
+    print(whisper_transcription)
+    
+    # 2) Detect context anomalies (LLM returns comma-separated indexes as string)
+    anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
+    anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
+    anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
+    
+    # 3) Optionally intersect with low-confidence words
+    if USE_LOW_CONF_INTERSECTION:
+        anomaly_idxs_intersect = intersect_with_low_confidence_score(whisper_result, anomaly_idxs)
+    else:
+        anomaly_idxs_intersect = anomaly_idxs
+    
+    # 4) Replace selected words with [blank] and adjust timestamps
+    words_after_anomaly_mask = insert_blank_and_modify_timestamp(whisper_result, anomaly_idxs_intersect)
+    
+    # 5) Optionally apply loud-noise masking/insertions
+    if USE_NOISE_MASKING:
+        energy_segments = detect_energy(AUDIO_PATH)
+        words_after_noise_mask = adjust_by_noise_segments(words_after_anomaly_mask, energy_segments)
+    else:
+        energy_segments = []
+        words_after_noise_mask = words_after_anomaly_mask
+    
+    # 6) Prepare text with placeholders for prediction
+    blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
     predicted_trans = word_predictor(blank_inserted_trans)
-  
+    predicted_text = predicted_trans.choices[0].message.content
+    
+    # 7) Diagnostics (compact)
+    print("\n==== TOOLS USED / DIAGNOSTICS ====\n")
+    print("Context anomaly idxs (raw):", anomaly_idxs)
+    print("Context anomaly idxs ∩ low-conf (<{:.2f}):".format(CONF_THRESH), anomaly_idxs_intersect)
+    print("\nLow-confidence words (<{:.2f}>):".format(CONF_THRESH))
+    print_low_confidence_words(whisper_result, CONF_THRESH)
+    print("\nLoud noise segments:")
+    print_loud_noise_segments(energy_segments)
+    
+    # 8) Outputs
+    print("\n==== TRANSCRIPTION WITH PLACEHOLDERS ====\n")
+    print(blank_inserted_trans)
+    
+    print("\n==== FINAL RESULT (PREDICTED TEXT) ====\n")
+    print(predicted_text)
 
-    print("\n\n\n\n #### FINAL RESULT ####\n")
-    print(predicted_trans.choices[0].message.content)
+
+if __name__ == "__main__":
+    main()
+
 
 
 
