@@ -27,5 +27,3 @@ def wordtokens_from_json(json_str: str) -> List[WordToken]:
 
 class FixResponse(BaseModel):
     fixed_url: str
-
-    
