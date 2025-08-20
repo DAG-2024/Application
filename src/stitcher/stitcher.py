@@ -18,35 +18,62 @@ async def save_upload_file(upload: UploadFile) -> str:
     return path
 
 def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> str:
-    """Concatenate all good speech clips into one WAV for TTS voice print."""
-    inp = ffmpeg.input(orig_path)
-    clips = []
+    """
+    Extract the longest sequential clean speech segment (up to 15s) from the original audio using WordToken timings.
+    """
+    # Find all runs of clean speech
+    runs = []
+    current_run = []
     for s in WordTokens:
         if not s.to_synth and s.is_speech:
-            clip = (
-                inp
-                .filter("atrim", start=s.start, end=s.end)
-                .filter("asetpts", "PTS-STARTPTS")
-            )
-            clips.append(clip)
-    if not clips:
+            current_run.append(s)
+        else:
+            if current_run:
+                runs.append(current_run)
+                current_run = []
+    if current_run:
+        runs.append(current_run)
+    # Find the longest run
+    best_run = max(runs, key=lambda run: run[-1].end - run[0].start, default=None)
+    if not best_run:
         raise HTTPException(400, "No clean speech segments for voice print")
-    joined = ffmpeg.concat(*clips, v=0, a=1)
+    # Trim to max 15 seconds
+    start = best_run[0].start
+    end = best_run[-1].end
+    if end - start > 15:
+        end = start + 15
     out = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_vp.wav")
-    joined.output(out, acodec="pcm_s16le").run(overwrite_output=True)
+    (
+        ffmpeg
+        .input(orig_path)
+        .filter('atrim', start=start, end=end)
+        .filter('asetpts', 'PTS-STARTPTS')
+        .output(out, acodec="pcm_s16le")
+        .run(overwrite_output=True)
+    )
     return out  # local path
 
 def synth_segments(vp_path: str, wordTokens: List[WordToken]):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
+    # For testing, assume transcription is available as a string
+    vp_transcription = "Test transcription for voice print audio."
+    # Trim vp_path to max 15 seconds for each request
+    trimmed_vp_path = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_vp15s.wav")
+    (
+        ffmpeg
+        .input(vp_path, t=15)
+        .output(trimmed_vp_path, acodec="pcm_s16le")
+        .run(overwrite_output=True)
+    )
     for s in wordTokens:
         if s.to_synth and s.is_speech:
             with open(vp_path, "rb") as vp:
                 files = {
-                    "voicePrint": ("vp.wav", vp, "audio/wav")
+                    "audio_file": ("vp.wav", vp, "audio/wav")
                 }
-                data = {"text": s.text}
+                data = {"input_transcription": vp_transcription,"target_text": s.text}
                 resp = requests.post(
-                    "https://your-tts/api/synthesize",
+                    "https://localhost:9000/generate-speech",
                     data=data, files=files
                 )
             resp.raise_for_status()
@@ -98,8 +125,8 @@ async def fix_audio(
     # 1. Save upload locally
     orig_path = await save_upload_file(file)
 
-    # 2. Build voice-print from good clips
-    vp_path = make_voice_print(orig_path,payload)
+    # 2. Build voice-print from longest clean speech segment (max 15s)
+    vp_path = make_voice_print(orig_path, payload)
 
     # 3. TTS the bad clips
     synth_segments(vp_path, payload)
