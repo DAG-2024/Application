@@ -56,7 +56,7 @@ def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> str:
 def synth_segments(vp_path: str, wordTokens: List[WordToken]):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
     # For testing, assume transcription is available as a string
-    vp_transcription = "Test transcription for voice print audio."
+    vp_transcription = "things escalate a bit. So how do you represent letters? Because obviously this makes our devices more useful, whether it's in English or any other human language. How could we go about representing the letter A for instance?."
     # Trim vp_path to max 15 seconds for each request
     trimmed_vp_path = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_vp15s.wav")
     (
