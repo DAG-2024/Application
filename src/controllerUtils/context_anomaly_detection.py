@@ -1,14 +1,18 @@
-from openai import OpenAI
+from openai import AzureOpenAI
 from dotenv import load_dotenv
 import os
 
 
 
 def ctx_anomaly_detector(transcription: str, indexed_transcription: str):
-    load_dotenv(dotenv_path="config.env")
+    load_dotenv(dotenv_path="AZURE_OPENAI.env")
 
-    
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = AzureOpenAI(
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21"),
+    )
+
     # The system prompt to set context
     system_prompt = ("""You are an expert language model helping to identify contextually incorrect words in a computer science lecture transcription.
                       The original audio contained segments of noise that may have masked a single word per segment,
@@ -49,15 +53,13 @@ def ctx_anomaly_detector(transcription: str, indexed_transcription: str):
         
     )
 
-
-    # Call GPT-4o
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt35-deploy"),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"The transcription:\n\n{transcription}" +  f"the indexed transcription: {indexed_transcription}"}
         ],
-        temperature=0.2  # low temperature for more deterministic output
+        temperature=0.2
     )
 
     # return the result

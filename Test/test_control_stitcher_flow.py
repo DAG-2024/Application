@@ -1,10 +1,16 @@
 import requests
 import json
 
+CONTROLLER_URL = "0.0.0.0"
+CONTROLLER_PORT = 9002
+
+STITCHER_URL = "0.0.0.0"
+STITCHER_PORT = 9001
+
 # --- CONFIG ---
-FEED_AUDIO_URL = "http://localhost:8000/feed-audio"
-FIX_AUDIO_URL = "http://localhost:8000/fix-audio"
-AUDIO_FILE_PATH = "path/to/your/test_audio.wav"  # <-- Change to your test audio file
+FEED_AUDIO_URL = f"http://{CONTROLLER_URL}:{CONTROLLER_PORT}/feed-audio"
+FIX_AUDIO_URL =  f"http://{STITCHER_URL}:{STITCHER_PORT}/fix-audio"
+AUDIO_FILE_PATH = "sample_audio.wav"
 OUTPUT_WAV_PATH = "fixed_output.wav"
 
 # 1. Call feed_audio endpoint

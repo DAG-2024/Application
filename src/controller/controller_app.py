@@ -48,6 +48,9 @@ async def feed_audio(file: UploadFile = File(...)):
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
+        print("##### Transcription #####")
+        # TODO: FIND BUG!!
+
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
@@ -66,10 +69,14 @@ async def feed_audio(file: UploadFile = File(...)):
             energy_segments = []
             words_after_noise_mask = words_after_anomaly_mask
 
+        print("##### DETECT #####")
+
         blank_indices = [i for i, w in enumerate(words_after_noise_mask) if w['word'] == '[blank]']
         blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
         predicted_trans = word_predictor(blank_inserted_trans)
         predicted_text = predicted_trans.choices[0].message.content
+
+        print("##### PREDICT #####")
 
         # Split predicted_text into words for mapping
         predicted_words = predicted_text.strip().split()
@@ -98,6 +105,16 @@ async def feed_audio(file: UploadFile = File(...)):
         return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "message": "Controller is running",
+    }
+
 
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
