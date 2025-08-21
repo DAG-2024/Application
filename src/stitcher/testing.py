@@ -22,9 +22,9 @@ if __name__ == "__main__":
                 file_path = fixed_url[7:]
 
                 with open(file_path, "rb") as src:
-                    save_audio_file(src.read(), './testing', prefix='output', ext='.wav')
+                    save_audio_file(src.read(), './testing/', prefix='output', ext='.wav')
 
-                print("Saved output to output.wav")
+                print("Saved output")
             else:
                 print("No valid fixed_url in response.")
         else:

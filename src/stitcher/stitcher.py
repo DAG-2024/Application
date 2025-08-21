@@ -10,6 +10,8 @@ from tempfile import gettempdir
 Remove before flight:
 TODO: Remove this code before flight. It is used for testing and debugging.
 """
+from models.stitcherModels import save_wordtokens_json, save_wordtokens_json
+
 def get_next_audio_index(index_file):
     if os.path.exists(index_file):
         with open(index_file, 'r') as f:
@@ -21,8 +23,8 @@ def get_next_audio_index(index_file):
         f.write(str(idx))
     return idx
 
-def save_audio_file(data, dir_path='.', prefix='voice_print', ext='.wav'):
-    idx = get_next_audio_index(dir_path + prefix + "_index.txt")
+def save_audio_file(data, dir_path='./', prefix='voice_print', ext='.wav'):
+    idx = get_next_audio_index(dir_path + "index/" + prefix + "_index.txt")
     filename = f"{prefix}_{idx}{ext}"
     path = os.path.join(dir_path, filename)
     with open(path, 'wb') as f:
@@ -44,7 +46,35 @@ async def save_upload_file(upload: UploadFile) -> str:
         f.write(data)
     return path
 
-def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> (str, str):
+def normalize_text(text: str, default_punct: str = '.') -> str:
+    text = text.strip()
+    # Check if ends with ? or !
+    if text.endswith('?') or text.endswith('!'):
+        punct = text[-1]
+        text = text[:-1]
+    else:
+        punct = default_punct
+        text = re.sub(r'[\.!\?,;:]+$', '', text)
+    # Capitalize first letter
+    if text:
+        text = text[0].upper() + text[1:]
+    return text + punct
+
+def mean_word_gap(wordtokens: list) -> float:
+    """
+    Calculate the mean gap (in seconds) between consecutive WordToken objects.
+    Returns 0.0 if fewer than 2 tokens.
+    """
+    if len(wordtokens) < 2:
+        return 0.0
+    gaps = [
+        wordtokens[i].start - wordtokens[i - 1].end
+        for i in range(1, len(wordtokens))
+        if wordtokens[i].start > wordtokens[i - 1].end
+    ]
+    return sum(gaps) / len(gaps) if gaps else 0.0
+
+def make_voice_print(orig_path: str, wordTokens: List[WordToken]) -> (str, str):
     """
     Extract the longest sequential clean speech segment (up to 15s) from the original audio using WordToken timings.
     """
@@ -53,11 +83,14 @@ def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> (str, str):
     current_run = []
     best_run = None
 
-    for s in WordTokens:
-        current_run and s.end - current_run[0].start >= 15:
+    # Max gap between two words for voice print
+    gap = mean_word_gap(wordTokens) * 2
+
+    for s in wordTokens:
+        if current_run and s.end - current_run[0].start >= 15:
             best_run = current_run
             break
-        elif s.to_synth or not s.is_speech :
+        elif s.to_synth or not s.is_speech or (current_run and s.start - current_run[-1].end >= gap):
             if current_run:
                 runs.append(current_run)
                 current_run = []
@@ -76,9 +109,7 @@ def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> (str, str):
     end = best_run[-1].end
 
     transcription = " ".join(s.text for s in best_run)
-    # Remove only the last punctuation if present and replace with a period
-    transcription = re.sub(r'[\.!\?,;:]$', '', transcription.strip())
-    transcription = transcription.rstrip() + '.'
+    transcription = normalize_text(transcription)
 
     out = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_vp.wav")
     (
@@ -99,21 +130,28 @@ def synth_segments_word_bleed(wordTokens: List[WordToken], index: int):
     If a word is marked for synthesis, its neighbors are adjusted to avoid overlap.
     Bleed range is 3 word on either side or until a punctuation mark is found.
     """
+    continue_left, continue_right = True, True
     for i in range(1, 3):
 
-        continue_left = index - i >= 0 and wordTokens[index - i].is_speech and wordTokens[index - i].text[-1] not in ".!?,;:"
+        continue_left = (continue_left
+                         and index - i >= 0
+                         and wordTokens[index - i].is_speech
+                         and wordTokens[index - i].text[-1] not in ".!?,;:")
 
-        continue_right = index + i < len(wordTokens) and wordTokens[index + i].is_speech and wordTokens[index + i - 1].text[-1] not in ".!?,;:"
+        continue_right = (continue_right
+                          and index + i < len(wordTokens)
+                          and wordTokens[index + i].is_speech
+                          and wordTokens[index + i - 1].text[-1] not in ".!?,;:")
 
         if continue_left:
             wordTokens[index].text = wordTokens[index - i].text + " " + wordTokens[index].text
-            wordTokens[index].is_speech = False
+            wordTokens[index - i].is_speech = False
 
         if continue_right:
             wordTokens[index].text += " " + wordTokens[index + i].text
-            wordTokens[index].is_speech = False
+            wordTokens[index + i].is_speech = False
 
-    # TODO: add priod at the end
+    wordTokens[index].text = normalize_text(wordTokens[index].text)
 
 def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
@@ -130,7 +168,7 @@ def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str
                         "input_transcription": transcription,
                         "target_text": s.text,
                         'top_p': '0.95',           #  Adjusts the diversity of generated content
-                        'temperature': '0.8'    #  Controls randomness in output
+                        'temperature': '0.7'    #  Controls randomness in output
                 }
                 resp = requests.post(
                     "http://localhost:9000/generate-speech",
@@ -140,11 +178,12 @@ def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str
             """ 
             TODO: Remove this debug logging before flight
             """
+            idx = get_next_audio_index("./testing/index/logs_index.txt")
             with open("testing/stitcher_logs.txt", "a") as f:
-                f.write("Synthesizing: " + s.text + "\n" + "transcription: " + transcription + "\n\n")
+                f.write(f"index: {idx}"  + "\n" "Synthesizing: " + s.text + "\n" + "transcription: " + transcription + "\n\n")
 
             with open(vp_path, "rb") as src:
-                save_audio_file(src.read(), './testing', prefix='vp', ext='.wav')
+                save_audio_file(src.read(), './testing/', prefix='vp', ext='.wav')
             """
             Remove before flight
             """
@@ -208,4 +247,12 @@ async def fix_audio(
     vp_path, transcription = make_voice_print(orig_path, word_tokens)
     synth_segments(vp_path, word_tokens, transcription)
     result = stitch_all(orig_path, word_tokens)
+
+    """
+    TODO: Remove before flight 
+    """
+    # store edited json for debugging
+    save_wordtokens_json(word_tokens, './testing/edited_audio.json', pretty=True)
+
+
     return FixResponse(fixed_url=f"file://{result}")

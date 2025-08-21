@@ -378,7 +378,7 @@
     {
         "start": 13.348,
         "end": 13.449,
-        "text": " All our computers. ",
+        "text": "computers,",
         "to_synth": true,
         "is_speech": true,
         "synth_path": null
