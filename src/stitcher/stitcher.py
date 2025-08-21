@@ -3,9 +3,34 @@ from models.stitcherModels import WordToken, FixResponse
 from typing import List
 import uuid, os, requests
 import ffmpeg
-import pyloudnorm as pyln
-import soundfile as sf
+import re
 from tempfile import gettempdir
+
+"""
+Remove before flight:
+TODO: Remove this code before flight. It is used for testing and debugging.
+"""
+def get_next_audio_index(index_file):
+    if os.path.exists(index_file):
+        with open(index_file, 'r') as f:
+            idx = int(f.read().strip())
+    else:
+        idx = 0
+    idx += 1
+    with open(index_file, 'w') as f:
+        f.write(str(idx))
+    return idx
+
+def save_audio_file(data, dir_path='.', prefix='voice_print', ext='.wav'):
+    idx = get_next_audio_index(dir_path + prefix + "_index.txt")
+    filename = f"{prefix}_{idx}{ext}"
+    path = os.path.join(dir_path, filename)
+    with open(path, 'wb') as f:
+        f.write(data)
+    return path
+""" 
+Remove before flight
+"""
 
 app = FastAPI()
 
@@ -19,33 +44,42 @@ async def save_upload_file(upload: UploadFile) -> str:
         f.write(data)
     return path
 
-def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> str:
+def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> (str, str):
     """
     Extract the longest sequential clean speech segment (up to 15s) from the original audio using WordToken timings.
     """
     # Find all runs of clean speech
     runs = []
     current_run = []
+    best_run = None
+
     for s in WordTokens:
-        if not s.to_synth and s.is_speech:
-            current_run.append(s)
-        else:
+        current_run and s.end - current_run[0].start >= 15:
+            best_run = current_run
+            break
+        elif s.to_synth or not s.is_speech :
             if current_run:
                 runs.append(current_run)
                 current_run = []
+        else:
+            current_run.append(s)
     if current_run:
         runs.append(current_run)
+
     # Find the longest run
-    best_run = max(runs, key=lambda run: run[-1].end - run[0].start, default=None)
-    if not best_run:
-        raise HTTPException(400, "No clean speech segments for voice print")
-    # Trim to max 15 seconds
-    # start = best_run[0].start
-    # end = best_run[-1].end
-    # if end - start > 15:
-    #     end = start + 15
-    start = 0 # For testing, use a short segment
-    end = 15  # For testing, use a short segment
+    if best_run is None:
+        best_run = max(runs, key=lambda run: run[-1].end - run[0].start, default=None)
+        if not best_run:
+            raise HTTPException(400, "No clean speech segments for voice print")
+
+    start = best_run[0].start
+    end = best_run[-1].end
+
+    transcription = " ".join(s.text for s in best_run)
+    # Remove only the last punctuation if present and replace with a period
+    transcription = re.sub(r'[\.!\?,;:]$', '', transcription.strip())
+    transcription = transcription.rstrip() + '.'
+
     out = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_vp.wav")
     (
         ffmpeg
@@ -55,22 +89,45 @@ def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> str:
         .output(out, acodec="pcm_s16le", ar=16000)
         .run(overwrite_output=True)
     )
-    return out  # local path
+
+    return out, transcription # local path and transcription text
 
 
-def synth_segments(vp_path: str, wordTokens: List[WordToken]):
+def synth_segments_word_bleed(wordTokens: List[WordToken], index: int):
+    """
+    Adjust word tokens to synthesize whole sentences without overlap.
+    If a word is marked for synthesis, its neighbors are adjusted to avoid overlap.
+    Bleed range is 3 word on either side or until a punctuation mark is found.
+    """
+    for i in range(1, 3):
+
+        continue_left = index - i >= 0 and wordTokens[index - i].is_speech and wordTokens[index - i].text[-1] not in ".!?,;:"
+
+        continue_right = index + i < len(wordTokens) and wordTokens[index + i].is_speech and wordTokens[index + i - 1].text[-1] not in ".!?,;:"
+
+        if continue_left:
+            wordTokens[index].text = wordTokens[index - i].text + " " + wordTokens[index].text
+            wordTokens[index].is_speech = False
+
+        if continue_right:
+            wordTokens[index].text += " " + wordTokens[index + i].text
+            wordTokens[index].is_speech = False
+
+    # TODO: add priod at the end
+
+def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
-    # For testing, assume transcription is available as a string
-    vp_transcription = " things escalate a bit. So how do you represent letters? Because obviously this makes our devices more useful, whether it's in English or any other human language. How could we go about representing the letter A for instance, if at the end of the day, all our kids, all our phones have access to."
 
-    for s in wordTokens:
+    for i, s in enumerate(wordTokens):
         if s.to_synth and s.is_speech:
+            # Adjust neighbors to avoid overlap
+            synth_segments_word_bleed(wordTokens, i)
             with open(vp_path, "rb") as vp:
                 files = {
                     "audio_file": ("vp.wav", vp, "audio/wav")
                 }
                 data = {
-                        "input_transcription": vp_transcription,
+                        "input_transcription": transcription,
                         "target_text": s.text,
                         'top_p': '0.95',           #  Adjusts the diversity of generated content
                         'temperature': '0.8'    #  Controls randomness in output
@@ -79,7 +136,19 @@ def synth_segments(vp_path: str, wordTokens: List[WordToken]):
                     "http://localhost:9000/generate-speech",
                     data=data, files=files
                 )
-                print(data)
+
+            """ 
+            TODO: Remove this debug logging before flight
+            """
+            with open("testing/stitcher_logs.txt", "a") as f:
+                f.write("Synthesizing: " + s.text + "\n" + "transcription: " + transcription + "\n\n")
+
+            with open(vp_path, "rb") as src:
+                save_audio_file(src.read(), './testing', prefix='vp', ext='.wav')
+            """
+            Remove before flight
+            """
+
             resp.raise_for_status()
             # assume raw audio bytes returned
             ct = resp.headers.get("Content-Type", "")
@@ -95,9 +164,9 @@ def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
     clips = []
     prev_end = 0
     for s in wordTokens:
-        if s.synth_path:
+        if s.synth_path and s.to_synth:
             clips.append(ffmpeg.input(s.synth_path))
-        else:
+        elif s.is_speech and not s.to_synth:
             clip = (
                 ffmpeg
                 .input(orig_path)
@@ -136,8 +205,7 @@ async def fix_audio(
         raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")
 
     orig_path = await save_upload_file(file)
-    vp_path = make_voice_print(orig_path, word_tokens)
-    synth_segments(vp_path, word_tokens)
-    # synth_segments(orig_path, word_tokens)
+    vp_path, transcription = make_voice_print(orig_path, word_tokens)
+    synth_segments(vp_path, word_tokens, transcription)
     result = stitch_all(orig_path, word_tokens)
     return FixResponse(fixed_url=f"file://{result}")

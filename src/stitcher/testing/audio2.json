@@ -360,14 +360,6 @@
         "synth_path": null
     },
     {
-        "start": 13.348,
-        "end": 13.449,
-        "text": "All our computers.",
-        "to_synth": true,
-        "is_speech": true,
-        "synth_path": null
-    },
-    {
         "start": 13.469,
         "end": 13.569,
         "text": "all",
