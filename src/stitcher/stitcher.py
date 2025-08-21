@@ -1,9 +1,38 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body
+from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
 from models.stitcherModels import WordToken, FixResponse
 from typing import List
 import uuid, os, requests
 import ffmpeg
+import re
 from tempfile import gettempdir
+
+"""
+Remove before flight:
+TODO: Remove this code before flight. It is used for testing and debugging.
+"""
+from models.stitcherModels import save_wordtokens_json, save_wordtokens_json
+
+def get_next_audio_index(index_file):
+    if os.path.exists(index_file):
+        with open(index_file, 'r') as f:
+            idx = int(f.read().strip())
+    else:
+        idx = 0
+    idx += 1
+    with open(index_file, 'w') as f:
+        f.write(str(idx))
+    return idx
+
+def save_audio_file(data, dir_path='./', prefix='voice_print', ext='.wav'):
+    idx = get_next_audio_index(dir_path + "index/" + prefix + "_index.txt")
+    filename = f"{prefix}_{idx}{ext}"
+    path = os.path.join(dir_path, filename)
+    with open(path, 'wb') as f:
+        f.write(data)
+    return path
+""" 
+Remove before flight
+"""
 
 app = FastAPI()
 
@@ -17,65 +46,148 @@ async def save_upload_file(upload: UploadFile) -> str:
         f.write(data)
     return path
 
-def make_voice_print(orig_path: str, WordTokens: List[WordToken]) -> str:
+def normalize_text(text: str, default_punct: str = '.') -> str:
+    text = text.strip()
+    # Check if ends with ? or !
+    if text.endswith('?') or text.endswith('!'):
+        punct = text[-1]
+        text = text[:-1]
+    else:
+        punct = default_punct
+        text = re.sub(r'[\.!\?,;:]+$', '', text)
+    # Capitalize first letter
+    if text:
+        text = text[0].upper() + text[1:]
+    return text + punct
+
+def mean_word_gap(wordtokens: list) -> float:
+    """
+    Calculate the mean gap (in seconds) between consecutive WordToken objects.
+    Returns 0.0 if fewer than 2 tokens.
+    """
+    if len(wordtokens) < 2:
+        return 0.0
+    gaps = [
+        wordtokens[i].start - wordtokens[i - 1].end
+        for i in range(1, len(wordtokens))
+        if wordtokens[i].start > wordtokens[i - 1].end
+    ]
+    return sum(gaps) / len(gaps) if gaps else 0.0
+
+def make_voice_print(orig_path: str, wordTokens: List[WordToken]) -> (str, str):
     """
     Extract the longest sequential clean speech segment (up to 15s) from the original audio using WordToken timings.
     """
     # Find all runs of clean speech
     runs = []
     current_run = []
-    for s in WordTokens:
-        if not s.to_synth and s.is_speech:
-            current_run.append(s)
-        else:
+    best_run = None
+
+    # Max gap between two words for voice print
+    gap = mean_word_gap(wordTokens) * 2
+
+    for s in wordTokens:
+        if current_run and s.end - current_run[0].start >= 15:
+            best_run = current_run
+            break
+        elif s.to_synth or not s.is_speech or (current_run and s.start - current_run[-1].end >= gap):
             if current_run:
                 runs.append(current_run)
                 current_run = []
+        else:
+            current_run.append(s)
     if current_run:
         runs.append(current_run)
+
     # Find the longest run
-    best_run = max(runs, key=lambda run: run[-1].end - run[0].start, default=None)
-    if not best_run:
-        raise HTTPException(400, "No clean speech segments for voice print")
-    # Trim to max 15 seconds
+    if best_run is None:
+        best_run = max(runs, key=lambda run: run[-1].end - run[0].start, default=None)
+        if not best_run:
+            raise HTTPException(400, "No clean speech segments for voice print")
+
     start = best_run[0].start
     end = best_run[-1].end
-    if end - start > 15:
-        end = start + 15
+
+    transcription = " ".join(s.text for s in best_run)
+    transcription = normalize_text(transcription)
+
     out = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_vp.wav")
     (
         ffmpeg
         .input(orig_path)
         .filter('atrim', start=start, end=end)
         .filter('asetpts', 'PTS-STARTPTS')
-        .output(out, acodec="pcm_s16le")
+        .output(out, acodec="pcm_s16le", ar=16000)
         .run(overwrite_output=True)
     )
-    return out  # local path
 
-def synth_segments(vp_path: str, wordTokens: List[WordToken]):
+    return out, transcription # local path and transcription text
+
+
+def synth_segments_word_bleed(wordTokens: List[WordToken], index: int):
+    """
+    Adjust word tokens to synthesize whole sentences without overlap.
+    If a word is marked for synthesis, its neighbors are adjusted to avoid overlap.
+    Bleed range is 3 word on either side or until a punctuation mark is found.
+    """
+    continue_left, continue_right = True, True
+    for i in range(1, 3):
+
+        continue_left = (continue_left
+                         and index - i >= 0
+                         and wordTokens[index - i].is_speech
+                         and wordTokens[index - i].text[-1] not in ".!?,;:")
+
+        continue_right = (continue_right
+                          and index + i < len(wordTokens)
+                          and wordTokens[index + i].is_speech
+                          and wordTokens[index + i - 1].text[-1] not in ".!?,;:")
+
+        if continue_left:
+            wordTokens[index].text = wordTokens[index - i].text + " " + wordTokens[index].text
+            wordTokens[index - i].is_speech = False
+
+        if continue_right:
+            wordTokens[index].text += " " + wordTokens[index + i].text
+            wordTokens[index + i].is_speech = False
+
+    wordTokens[index].text = normalize_text(wordTokens[index].text)
+
+def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
-    # For testing, assume transcription is available as a string
-    vp_transcription = "things escalate a bit. So how do you represent letters? Because obviously this makes our devices more useful, whether it's in English or any other human language. How could we go about representing the letter A for instance?."
-    # Trim vp_path to max 15 seconds for each request
-    trimmed_vp_path = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_vp15s.wav")
-    (
-        ffmpeg
-        .input(vp_path, t=15)
-        .output(trimmed_vp_path, acodec="pcm_s16le")
-        .run(overwrite_output=True)
-    )
-    for s in wordTokens:
+
+    for i, s in enumerate(wordTokens):
         if s.to_synth and s.is_speech:
+            # Adjust neighbors to avoid overlap
+            synth_segments_word_bleed(wordTokens, i)
             with open(vp_path, "rb") as vp:
                 files = {
                     "audio_file": ("vp.wav", vp, "audio/wav")
                 }
-                data = {"input_transcription": vp_transcription,"target_text": s.text}
+                data = {
+                        "input_transcription": transcription,
+                        "target_text": s.text,
+                        'top_p': '0.95',           #  Adjusts the diversity of generated content
+                        'temperature': '0.7'    #  Controls randomness in output
+                }
                 resp = requests.post(
-                    "https://localhost:9000/generate-speech",
+                    "http://localhost:9000/generate-speech",
                     data=data, files=files
                 )
+
+            """ 
+            TODO: Remove this debug logging before flight
+            """
+            idx = get_next_audio_index("./testing/index/logs_index.txt")
+            with open("testing/stitcher_logs.txt", "a") as f:
+                f.write(f"index: {idx}"  + "\n" "Synthesizing: " + s.text + "\n" + "transcription: " + transcription + "\n\n")
+
+            with open(vp_path, "rb") as src:
+                save_audio_file(src.read(), './testing/', prefix='vp', ext='.wav')
+            """
+            Remove before flight
+            """
+
             resp.raise_for_status()
             # assume raw audio bytes returned
             ct = resp.headers.get("Content-Type", "")
@@ -89,17 +201,19 @@ def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
     """Sequentially concat original & synth clips with 20 ms crossfade."""
     # build list of ffmpeg inputs
     clips = []
+    prev_end = 0
     for s in wordTokens:
-        if s.synth_path:
+        if s.synth_path and s.to_synth:
             clips.append(ffmpeg.input(s.synth_path))
-        else:
+        elif s.is_speech and not s.to_synth:
             clip = (
                 ffmpeg
                 .input(orig_path)
-                .filter("atrim", start=s.start, end=s.end)
+                .filter("atrim", start=prev_end, end=s.end)
                 .filter("asetpts", "PTS-STARTPTS")
             )
             clips.append(clip)
+        prev_end = s.end + 0.001  # retain speech flow
 
     # sequential 20 ms crossfade
     cur = clips[0]
@@ -111,7 +225,7 @@ def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
             c2="tri"
         )
 
-    out_path = os.path.join(gettempdir(), f"{uuid.uuid4().hex}_fixed.mp3")
+    out_path = os.path.join(gettempdir(), "gen.wav")
     ffmpeg.output(cur, out_path).run(overwrite_output=True)
     return out_path  # local path
 
@@ -120,18 +234,25 @@ def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
 @app.post("/fix-audio", response_model=FixResponse)
 async def fix_audio(
     file: UploadFile = File(...),
-    payload: List[WordToken] = Body(...)
+    payload: str = Form(...)
 ):
-    # 1. Save upload locally
+    try:
+        # Parse JSON string to list of WordToken objects
+        from models.stitcherModels import wordtokens_from_json
+        word_tokens = wordtokens_from_json(payload)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")
+
     orig_path = await save_upload_file(file)
+    vp_path, transcription = make_voice_print(orig_path, word_tokens)
+    synth_segments(vp_path, word_tokens, transcription)
+    result = stitch_all(orig_path, word_tokens)
 
-    # 2. Build voice-print from longest clean speech segment (max 15s)
-    vp_path = make_voice_print(orig_path, payload)
+    """
+    TODO: Remove before flight 
+    """
+    # store edited json for debugging
+    save_wordtokens_json(word_tokens, './testing/edited_audio.json', pretty=True)
 
-    # 3. TTS the bad clips
-    synth_segments(vp_path, payload)
-
-    # 4. Stitch everything in sequence with crossfade
-    result = stitch_all(orig_path, payload)
 
     return FixResponse(fixed_url=f"file://{result}")

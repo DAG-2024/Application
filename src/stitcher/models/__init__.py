@@ -2,10 +2,9 @@
 Models package for the audio stitcher application.
 """
 
-from .stitcherModels import Segment, FixRequest, FixResponse
+from .stitcherModels import WordToken, FixResponse
 
 __all__ = [
-    "Segment",
-    "FixRequest", 
+    "WordToken",
     "FixResponse"
 ]
