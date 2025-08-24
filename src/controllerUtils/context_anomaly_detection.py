@@ -5,18 +5,13 @@ import os
 
 
 def ctx_anomaly_detector(transcription: str, indexed_transcription: str):
-    load_dotenv(dotenv_path="../../AZURE_OPENAI.env")
-
-    print("##### Test a1 #####")
+    load_dotenv(dotenv_path="AZURE_OPENAI.env")
 
     client = AzureOpenAI(
         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
         azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
         api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21"),
     )
-
-    print("##### Test a2 #####")
-
 
     # The system prompt to set context
     system_prompt = ("""You are an expert language model helping to identify contextually incorrect words in a computer science lecture transcription.
@@ -52,14 +47,11 @@ def ctx_anomaly_detector(transcription: str, indexed_transcription: str):
 
                         Now, analyze the transcription below using both the plain and indexed versions.  
                         Return only the indices of the incorrect words.
-
-                     
                      """
-        
     )
 
     response = client.chat.completions.create(
-        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt35-deploy"),
+        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT"),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"The transcription:\n\n{transcription}" +  f"the indexed transcription: {indexed_transcription}"}

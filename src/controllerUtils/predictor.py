@@ -47,7 +47,7 @@ def word_predictor(transcription: str):
 
     # IMPORTANT: `model` is your DEPLOYMENT NAME for gpt-35-turbo in Azure
     response = client.chat.completions.create(
-        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt35-deploy"),
+        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT"),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"The transcription:\n\n{transcription}"}
