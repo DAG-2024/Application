@@ -1,9 +1,21 @@
 import sys
 import os
+import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 import shutil
 import uvicorn
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers = [
+        logging.FileHandler("app.log"),  # Logs will be written to 'app.log'
+        logging.StreamHandler()  # Logs will still be printed to the console
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Ensure the parent directory is in the path to import controllerUtils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,14 +63,19 @@ async def feed_audio(file: UploadFile = File(...)):
         print("##### Transcription #####")
         # TODO: FIND BUG!!
 
+        print("##### Test 1 #####")
+        print(whisper_transcription)
+        print(indexed_transcription)
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
+        print("##### Test 2 #####")
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
-
+        print("##### Test 4 #####")
         if USE_LOW_CONF_INTERSECTION:
             anomaly_idxs_intersect = intersect_with_low_confidence_score(whisper_result, anomaly_idxs, thresh=CONF_THRESH)
         else:
             anomaly_idxs_intersect = anomaly_idxs
+
 
         words_after_anomaly_mask = insert_blank_and_modify_timestamp(whisper_result, anomaly_idxs_intersect)
 
@@ -79,6 +96,7 @@ async def feed_audio(file: UploadFile = File(...)):
         wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
         return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
     except Exception as e:
+        logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
