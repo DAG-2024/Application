@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
-from models.stitcherModels import WordToken, FixResponse
+from .models.stitcherModels import WordToken, FixResponse
 from typing import List
 import uuid, os, requests
 import ffmpeg
@@ -10,7 +10,7 @@ from tempfile import gettempdir
 Remove before flight:
 TODO: Remove this code before flight. It is used for testing and debugging.
 """
-from models.stitcherModels import save_wordtokens_json, save_wordtokens_json
+from .models.stitcherModels import save_wordtokens_json, save_wordtokens_json
 
 def get_next_audio_index(index_file):
     if os.path.exists(index_file):
@@ -229,7 +229,15 @@ def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
     ffmpeg.output(cur, out_path).run(overwrite_output=True)
     return out_path  # local path
 
-# ——— Endpoint ——————————————————————————————————————————————————————————
+# ——— Endpoint ————————————————————————————————————————————————————���—————
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "message": "Stitcher service is running"
+    }
 
 @app.post("/fix-audio", response_model=FixResponse)
 async def fix_audio(
@@ -238,7 +246,7 @@ async def fix_audio(
 ):
     try:
         # Parse JSON string to list of WordToken objects
-        from models.stitcherModels import wordtokens_from_json
+        from .models.stitcherModels import wordtokens_from_json
         word_tokens = wordtokens_from_json(payload)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")

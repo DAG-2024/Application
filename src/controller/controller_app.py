@@ -48,6 +48,9 @@ async def feed_audio(file: UploadFile = File(...)):
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
+        print("##### Transcription #####")
+        # TODO: FIND BUG!!
+
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
@@ -66,38 +69,27 @@ async def feed_audio(file: UploadFile = File(...)):
             energy_segments = []
             words_after_noise_mask = words_after_anomaly_mask
 
-        blank_indices = [i for i, w in enumerate(words_after_noise_mask) if w['word'] == '[blank]']
+        print("##### DETECT #####")
+
         blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
-        predicted_trans = word_predictor(blank_inserted_trans)
-        predicted_text = predicted_trans.choices[0].message.content
+        predicted_text = word_predictor(blank_inserted_trans)
 
-        # Split predicted_text into words for mapping
-        predicted_words = predicted_text.strip().split()
+        print("##### PREDICT #####")
 
-        wordtokens = []
-        pred_word_idx = 0
-        for i, w in enumerate(words_after_noise_mask):
-            if i in blank_indices and pred_word_idx < len(predicted_words):
-                token_text = predicted_words[pred_word_idx]
-                to_synth = True
-                is_speech = False
-                pred_word_idx += 1
-            else:
-                token_text = w['word']
-                to_synth = False
-                is_speech = True
-            wordtokens.append(WordToken(
-                start=w['start'],
-                end=w['end'],
-                text=token_text,
-                to_synth=to_synth,
-                is_speech=is_speech,
-                synth_path=None
-            ))
-
+        wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
         return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "message": "Controller is running",
+    }
+
 
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
@@ -241,3 +233,58 @@ def insert_blank_and_modify_timestamp(whisper_res, indexes):
             curr_word['end'] = float(next_word['start'])
         # Optional: skip edge cases (first or last word) silently
     return all_words
+
+def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
+    orig_words = [w['word'] for w in words_after_noise_mask]
+    pred_words = predicted_text.strip().split()
+
+    wordtokens = []
+    orig_idx = 0
+    pred_idx = 0
+    while orig_idx < len(words_after_noise_mask):
+        w = words_after_noise_mask[orig_idx]
+        if w['word'] == '[blank]':
+            # Find the next non-blank word in the original
+            next_non_blank = None
+            for j in range(orig_idx + 1, len(orig_words)):
+                if orig_words[j] != '[blank]':
+                    next_non_blank = orig_words[j]
+                    break
+            phrase = []
+            while pred_idx < len(pred_words) and (next_non_blank is None or pred_words[pred_idx] != next_non_blank):
+                phrase.append(pred_words[pred_idx])
+                pred_idx += 1
+            for word in phrase:
+                wordtokens.append(WordToken(
+                    start=w['start'],
+                    end=w['end'],
+                    text=word,
+                    to_synth=True,
+                    is_speech=False,
+                    synth_path=None
+                ))
+            orig_idx += 1
+        else:
+            # If the predicted word matches, consume it
+            if pred_idx < len(pred_words) and pred_words[pred_idx] == w['word']:
+                wordtokens.append(WordToken(
+                    start=w['start'],
+                    end=w['end'],
+                    text=w['word'],
+                    to_synth=False,
+                    is_speech=True,
+                    synth_path=None
+                ))
+                pred_idx += 1
+            else:
+                # If not matching, just add the original word
+                wordtokens.append(WordToken(
+                    start=w['start'],
+                    end=w['end'],
+                    text=w['word'],
+                    to_synth=False,
+                    is_speech=True,
+                    synth_path=None
+                ))
+            orig_idx += 1
+    return wordtokens
