@@ -63,3 +63,4 @@ output/
 # Temporary files
 *.tmp
 *.temp
+/AZURE_OPENAI.env
