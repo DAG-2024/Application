@@ -1,9 +1,21 @@
 import sys
 import os
+import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 import shutil
 import uvicorn
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers = [
+        logging.FileHandler("app.log"),  # Logs will be written to 'app.log'
+        logging.StreamHandler()  # Logs will still be printed to the console
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Ensure the parent directory is in the path to import controllerUtils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,17 +60,16 @@ async def feed_audio(file: UploadFile = File(...)):
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
-        print("##### Transcription #####")
-        # TODO: FIND BUG!!
 
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
-        anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
 
+        anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
         if USE_LOW_CONF_INTERSECTION:
             anomaly_idxs_intersect = intersect_with_low_confidence_score(whisper_result, anomaly_idxs, thresh=CONF_THRESH)
         else:
             anomaly_idxs_intersect = anomaly_idxs
+
 
         words_after_anomaly_mask = insert_blank_and_modify_timestamp(whisper_result, anomaly_idxs_intersect)
 
@@ -69,16 +80,14 @@ async def feed_audio(file: UploadFile = File(...)):
             energy_segments = []
             words_after_noise_mask = words_after_anomaly_mask
 
-        print("##### DETECT #####")
 
         blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
         predicted_text = word_predictor(blank_inserted_trans)
 
-        print("##### PREDICT #####")
-
         wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
         return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
     except Exception as e:
+        logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
@@ -260,7 +269,7 @@ def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
                     end=w['end'],
                     text=word,
                     to_synth=True,
-                    is_speech=False,
+                    is_speech=True,
                     synth_path=None
                 ))
             orig_idx += 1

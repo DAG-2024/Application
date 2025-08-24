@@ -47,14 +47,11 @@ def ctx_anomaly_detector(transcription: str, indexed_transcription: str):
 
                         Now, analyze the transcription below using both the plain and indexed versions.  
                         Return only the indices of the incorrect words.
-
-                     
                      """
-        
     )
 
     response = client.chat.completions.create(
-        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt35-deploy"),
+        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT"),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"The transcription:\n\n{transcription}" +  f"the indexed transcription: {indexed_transcription}"}

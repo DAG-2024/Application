@@ -1,38 +1,24 @@
+import logging
+
 from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
 from .models.stitcherModels import WordToken, FixResponse
 from typing import List
 import uuid, os, requests
 import ffmpeg
+import logging
 import re
 from tempfile import gettempdir
 
-"""
-Remove before flight:
-TODO: Remove this code before flight. It is used for testing and debugging.
-"""
-from .models.stitcherModels import save_wordtokens_json, save_wordtokens_json
-
-def get_next_audio_index(index_file):
-    if os.path.exists(index_file):
-        with open(index_file, 'r') as f:
-            idx = int(f.read().strip())
-    else:
-        idx = 0
-    idx += 1
-    with open(index_file, 'w') as f:
-        f.write(str(idx))
-    return idx
-
-def save_audio_file(data, dir_path='./', prefix='voice_print', ext='.wav'):
-    idx = get_next_audio_index(dir_path + "index/" + prefix + "_index.txt")
-    filename = f"{prefix}_{idx}{ext}"
-    path = os.path.join(dir_path, filename)
-    with open(path, 'wb') as f:
-        f.write(data)
-    return path
-""" 
-Remove before flight
-"""
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers = [
+        logging.FileHandler("stitcher.log"),  # Logs will be written to 'app.log'
+        logging.StreamHandler()  # Logs will still be printed to the console
+    ]
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -175,18 +161,6 @@ def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str
                     data=data, files=files
                 )
 
-            """ 
-            TODO: Remove this debug logging before flight
-            """
-            idx = get_next_audio_index("./testing/index/logs_index.txt")
-            with open("testing/stitcher_logs.txt", "a") as f:
-                f.write(f"index: {idx}"  + "\n" "Synthesizing: " + s.text + "\n" + "transcription: " + transcription + "\n\n")
-
-            with open(vp_path, "rb") as src:
-                save_audio_file(src.read(), './testing/', prefix='vp', ext='.wav')
-            """
-            Remove before flight
-            """
 
             resp.raise_for_status()
             # assume raw audio bytes returned
@@ -248,19 +222,17 @@ async def fix_audio(
         # Parse JSON string to list of WordToken objects
         from .models.stitcherModels import wordtokens_from_json
         word_tokens = wordtokens_from_json(payload)
-    except Exception as e:
+
+
+        orig_path = await save_upload_file(file)
+        vp_path, transcription = make_voice_print(orig_path, word_tokens)
+        synth_segments(vp_path, word_tokens, transcription)
+        result = stitch_all(orig_path, word_tokens)
+        return FixResponse(fixed_url=f"file://{result}")
+
+    except ValueError as e:
+        logger.error(f"Error: {e}")
         raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")
-
-    orig_path = await save_upload_file(file)
-    vp_path, transcription = make_voice_print(orig_path, word_tokens)
-    synth_segments(vp_path, word_tokens, transcription)
-    result = stitch_all(orig_path, word_tokens)
-
-    """
-    TODO: Remove before flight 
-    """
-    # store edited json for debugging
-    save_wordtokens_json(word_tokens, './testing/edited_audio.json', pretty=True)
-
-
-    return FixResponse(fixed_url=f"file://{result}")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
