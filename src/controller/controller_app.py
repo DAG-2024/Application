@@ -1,10 +1,12 @@
+from fastapi import Form
+import requests
+from stitcher.models.stitcherModels import wordtokens_from_json
 import sys
 import os
 import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 import shutil
-import uvicorn
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +37,53 @@ app = FastAPI()
 # Directory to save uploaded audio files
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "input", "uploaded_audio")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Endpoint to receive edited transcription and return fixed audio
+
+@app.post("/fix-edited-audio")
+async def fix_edited_audio(
+    file: UploadFile = File(...),
+    original_wordtokens: str = Form(...),
+    original_transcription: str = Form(...),
+    edited_transcription: str = Form(...)
+):
+    """
+    Receives the edited transcription and original wordtokens list from the UI, compares to original transcription,
+    reassembles the wordtokens list (changed/new words marked for synthesis), sends to stitcher, returns fixed audio URL.
+    """
+    try:
+        # Save uploaded audio
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Parse original wordtokens
+        orig_wordtokens = wordtokens_from_json(original_wordtokens)
+
+        # Reassemble wordtokens list using a robust alignment algorithm
+        new_wordtokens = align_transcriptions(
+            orig_wordtokens,
+            original_transcription,
+            edited_transcription
+        )
+
+        # Serialize new wordtokens for stitcher
+        new_wordtokens_json = wordtokens_to_json(new_wordtokens)
+
+        # Send to stitcher fix-audio endpoint
+        stitcher_url = "http://localhost:8000/fix-audio" # CHANGE PORT (according to config file)
+        with open(file_path, "rb") as audio_file:
+            response = requests.post(
+                stitcher_url,
+                files={"file": (file.filename, audio_file, file.content_type)},
+                data={"payload": new_wordtokens_json}
+            )
+        response.raise_for_status()
+        fixed_url = response.json().get("fixed_url")
+        return JSONResponse(content={"fixed_url": fixed_url})
+    except Exception as e:
+        logger.error(f"Error in fix-edited-audio: {str(e)}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 @app.post("/feed-audio")
@@ -81,11 +130,30 @@ async def feed_audio(file: UploadFile = File(...)):
             words_after_noise_mask = words_after_anomaly_mask
 
 
+        # Pre-prediction WordToken list (with blanks)
+        pre_wordtokens = []
+        for w in words_after_noise_mask:
+            pre_wordtokens.append(WordToken(
+                start=w['start'],
+                end=w['end'],
+                text=w['word'],
+                to_synth=(w['word'] == '[blank]'),
+                is_speech=True,
+                synth_path=None
+            ))
+
         blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
         predicted_text = word_predictor(blank_inserted_trans)
 
-        wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
-        return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
+        # Post-prediction WordToken list (with predicted words)
+        post_wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
+
+        return JSONResponse(content={
+            "pre_wordtokens": wordtokens_to_json(pre_wordtokens),
+            "post_wordtokens": wordtokens_to_json(post_wordtokens),
+            "pre_transcription": blank_inserted_trans,
+            "post_transcription": predicted_text
+        })
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -244,49 +312,96 @@ def insert_blank_and_modify_timestamp(whisper_res, indexes):
     return all_words
 
 def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
+    """
+    Simplified alignment assuming:
+    - Each [blank] is replaced by 1-2 words only
+    - No consecutive [blank]s
+    - Timing doesn't matter for to_synth=True words
+    """
     orig_words = [w['word'] for w in words_after_noise_mask]
     pred_words = predicted_text.strip().split()
-
+    
+    # Normalize words for comparison (case-insensitive only, preserve punctuation)
+    def normalize_word(word):
+        return word.lower()
+    
     wordtokens = []
     orig_idx = 0
     pred_idx = 0
-    while orig_idx < len(words_after_noise_mask):
+    
+    while orig_idx < len(words_after_noise_mask) and pred_idx < len(pred_words):
         w = words_after_noise_mask[orig_idx]
+        
         if w['word'] == '[blank]':
-            # Find the next non-blank word in the original
-            next_non_blank = None
-            for j in range(orig_idx + 1, len(orig_words)):
-                if orig_words[j] != '[blank]':
-                    next_non_blank = orig_words[j]
+            # Since each blank is 1-2 words, we need to determine how many
+            # Look ahead to find the next non-blank word as an anchor
+            next_anchor = None
+            next_anchor_idx = orig_idx + 1
+            
+            while next_anchor_idx < len(orig_words):
+                if orig_words[next_anchor_idx] != '[blank]':
+                    next_anchor = normalize_word(orig_words[next_anchor_idx])
                     break
-            phrase = []
-            while pred_idx < len(pred_words) and (next_non_blank is None or pred_words[pred_idx] != next_non_blank):
-                phrase.append(pred_words[pred_idx])
+                next_anchor_idx += 1
+            
+            # Consume 1-2 words until we hit the anchor or reach max
+            consumed_words = []
+            max_words_for_blank = 2
+            
+            while (pred_idx < len(pred_words) and 
+                   len(consumed_words) < max_words_for_blank):
+                
+                current_pred_word = normalize_word(pred_words[pred_idx])
+                
+                # If we found our anchor, stop consuming
+                if next_anchor and current_pred_word == next_anchor:
+                    break
+                
+                consumed_words.append(pred_words[pred_idx])
                 pred_idx += 1
-            for word in phrase:
+            
+            # Create WordTokens for consumed words (timing doesn't matter)
+            for word in consumed_words:
                 wordtokens.append(WordToken(
-                    start=w['start'],
+                    start=w['start'],  # Same timing is fine
                     end=w['end'],
                     text=word,
                     to_synth=True,
                     is_speech=True,
                     synth_path=None
                 ))
-            orig_idx += 1
+            
         else:
-            # If the predicted word matches, consume it
-            if pred_idx < len(pred_words) and pred_words[pred_idx] == w['word']:
-                wordtokens.append(WordToken(
-                    start=w['start'],
-                    end=w['end'],
-                    text=w['word'],
-                    to_synth=False,
-                    is_speech=True,
-                    synth_path=None
-                ))
-                pred_idx += 1
+            # Non-blank word - should match exactly (case-insensitive only)
+            if pred_idx < len(pred_words):
+                pred_normalized = normalize_word(pred_words[pred_idx])
+                orig_normalized = normalize_word(w['word'])
+                
+                if pred_normalized == orig_normalized:
+                    # Use the predicted word (may have different capitalization)
+                    wordtokens.append(WordToken(
+                        start=w['start'],
+                        end=w['end'],
+                        text=pred_words[pred_idx],
+                        to_synth=False,
+                        is_speech=True,
+                        synth_path=None
+                    ))
+                    pred_idx += 1
+                else:
+                    # Mismatch - use original word and log warning
+                    print(f"Warning: Word mismatch at position {orig_idx}. "
+                          f"Expected '{w['word']}', got '{pred_words[pred_idx] if pred_idx < len(pred_words) else 'END'}'")
+                    wordtokens.append(WordToken(
+                        start=w['start'],
+                        end=w['end'],
+                        text=w['word'],
+                        to_synth=False,  # Keep original
+                        is_speech=True,
+                        synth_path=None
+                    ))
             else:
-                # If not matching, just add the original word
+                # Ran out of predicted words - use original
                 wordtokens.append(WordToken(
                     start=w['start'],
                     end=w['end'],
@@ -295,5 +410,96 @@ def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
                     is_speech=True,
                     synth_path=None
                 ))
-            orig_idx += 1
+        
+        orig_idx += 1
+    
+    # Handle remaining original words (if predicted text was shorter)
+    while orig_idx < len(words_after_noise_mask):
+        w = words_after_noise_mask[orig_idx]
+        wordtokens.append(WordToken(
+            start=w['start'],
+            end=w['end'],
+            text=w['word'] if w['word'] != '[blank]' else '[MISSING]',
+            to_synth=(w['word'] == '[blank]'),  # Mark blanks for synthesis
+            is_speech=True,
+            synth_path=None
+        ))
+        orig_idx += 1
+    
+    # Log warning if there are leftover predicted words
+    if pred_idx < len(pred_words):
+        leftover = pred_words[pred_idx:]
+        print(f"Warning: {len(leftover)} unused predicted words: {leftover}")
+    
     return wordtokens
+
+def align_transcriptions(orig_tokens, orig_transcription, edited_transcription):
+    """
+    Aligns the original and edited transcriptions using a simple dynamic programming
+    approach to handle insertions, deletions, and substitutions.
+    Returns a new list of WordToken objects marked for synthesis.
+    """
+    orig_words = orig_transcription.strip().split()
+    edited_words = edited_transcription.strip().split()
+
+    # Create a new list for the output WordTokens
+    new_wordtokens = []
+    
+    # Use two pointers for alignment
+    orig_idx = 0
+    edited_idx = 0
+    
+    while edited_idx < len(edited_words) or orig_idx < len(orig_words):
+        edited_word = edited_words[edited_idx] if edited_idx < len(edited_words) else None
+        orig_word = orig_words[orig_idx] if orig_idx < len(orig_words) else None
+        orig_token = orig_tokens[orig_idx] if orig_idx < len(orig_tokens) else None
+
+        # Case 1: Word matches, use original WordToken
+        if edited_word and orig_word and edited_word.lower() == orig_word.lower():
+            new_wordtokens.append(WordToken(
+                start=orig_token.start,
+                end=orig_token.end,
+                text=edited_word,
+                to_synth=False,
+                is_speech=True,
+                synth_path=None
+            ))
+            orig_idx += 1
+            edited_idx += 1
+            
+        # Case 2: Word was inserted in edited transcription
+        elif edited_word and (not orig_word or edited_idx > orig_idx):
+            # Assign a default duration and mark for synthesis
+            last_end = new_wordtokens[-1].end if new_wordtokens else 0.0
+            new_token = WordToken(
+                start=last_end,
+                end=last_end + 0.5, # Default duration
+                text=edited_word,
+                to_synth=True,
+                is_speech=True,
+                synth_path=None
+            )
+            new_wordtokens.append(new_token)
+            edited_idx += 1
+            
+        # Case 3: Word was deleted from original transcription
+        elif orig_word and (not edited_word or orig_idx > edited_idx):
+            # Skip this word and advance the original pointer
+            orig_idx += 1
+
+        # Case 4: Mismatch (substitution or more complex change)
+        else:
+            # Mark the edited word for synthesis
+            new_token = WordToken(
+                start=orig_token.start,
+                end=orig_token.end,
+                text=edited_word,
+                to_synth=True,
+                is_speech=True,
+                synth_path=None
+            )
+            new_wordtokens.append(new_token)
+            orig_idx += 1
+            edited_idx += 1
+
+    return new_wordtokens
