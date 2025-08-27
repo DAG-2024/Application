@@ -11,7 +11,7 @@ from tempfile import gettempdir
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers = [
         logging.FileHandler("stitcher.log"),  # Logs will be written to 'app.log'

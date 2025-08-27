@@ -60,4 +60,5 @@ def ctx_anomaly_detector(transcription: str, indexed_transcription: str):
     )
 
     # return the result
+
     return response

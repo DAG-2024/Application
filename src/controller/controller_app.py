@@ -8,7 +8,7 @@ import uvicorn
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers = [
         logging.FileHandler("app.log"),  # Logs will be written to 'app.log'
@@ -26,8 +26,12 @@ from controllerUtils import (
     get_words_in_loud_segments,
     word_overlap_with_noise,
     ctx_anomaly_detector,
-    word_predictor
+    word_predictor,
+
+    build_word_tokens_of_detecation,
+    predict_and_fill_tokens,
 )
+
 from stitcher.models.stitcherModels import WordToken, wordtokens_to_json
 
 app = FastAPI()
@@ -60,18 +64,28 @@ async def feed_audio(file: UploadFile = File(...)):
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
+        print_low_confidence_words(whisper_result, CONF_THRESH)
 
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
+        logger.debug(f"Whisper Transcription: {whisper_transcription}")
+        logger.debug(f"Indexed Transcription: {indexed_transcription}")
+        logger.debug(f"anomaly_res: {anomaly_res.choices[0].message.content}")
+
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
 
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
+        logger.debug(f"anomaly_idxs - 1 : {anomaly_idxs}")
+
+
         if USE_LOW_CONF_INTERSECTION:
             anomaly_idxs_intersect = intersect_with_low_confidence_score(whisper_result, anomaly_idxs, thresh=CONF_THRESH)
         else:
             anomaly_idxs_intersect = anomaly_idxs
-
+        logger.debug(f"anomaly_idxs after confidence score - 2 : {anomaly_idxs_intersect}")
 
         words_after_anomaly_mask = insert_blank_and_modify_timestamp(whisper_result, anomaly_idxs_intersect)
+
+        logger.debug(f"anomaly_idxs after words_after_anomaly_mask - # : {words_after_anomaly_mask}")
 
         if USE_NOISE_MASKING:
             energy_segments = detect_energy(AUDIO_PATH)
@@ -81,8 +95,15 @@ async def feed_audio(file: UploadFile = File(...)):
             words_after_noise_mask = words_after_anomaly_mask
 
 
+        logger.debug(f"anomaly_idxs after noise masking - 4 : {words_after_noise_mask}")
+
+
         blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
+
+        logger.debug(f"Blank Inserted Transcription: : {blank_inserted_trans}")
         predicted_text = word_predictor(blank_inserted_trans)
+
+        logger.debug(f"Predicted Text: {predicted_text}")
 
         wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
         return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
