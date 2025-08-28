@@ -1,25 +1,4 @@
-"""
-Defect noise event for single-speaker speech recordings
-==================================================
-
-This module detects problematic audio segments and fuses them with Whisper's
-word-level confidences to decide whether to:
-  - RESYNTHESIZE (replace speech),
-  - NOISE_SUPPRESS (keep speech, suppress noise),
-  - MUMBLE_RESYNTHESIZE (replace likely mumbled speech).
-
-Pipeline:
-1) WebRTC VAD -> speech gating
-2) Acoustic features -> transient/noise event detection
-3) Load Whisper transcript (word-level timestamps + confidences)
-4) Fuse acoustic events + Whisper confidences
-5) Output actionable segments with timestamps & decision labels
-
-Author: you :)
-"""
-
-from typing import List, Dict, Any, Tuple, Optional
-import json
+from typing import List, Tuple
 import numpy as np
 import librosa
 import webrtcvad
@@ -50,6 +29,8 @@ def webrtc_speech_mask(y: np.ndarray, sr: int, mode: int = 2, frame_ms: int = 20
     """
     WebRTC VAD: return a boolean mask per hop where True=Speech.
     mode: 0 (lenient) .. 3 (strict). Higher means fewer false speech detections.
+    frame_ms: frame size in ms (10, 20, or 30), meaning the VAD decision is made every frame_ms.
+    hop_ms: hop size in ms (usually ≤ frame_ms, e.g. 10ms)
     """
     assert sr in (8000, 16000, 32000, 48000), "WebRTC VAD requires 8/16/32/48 kHz"
     vad = webrtcvad.Vad(mode)
@@ -59,6 +40,7 @@ def webrtc_speech_mask(y: np.ndarray, sr: int, mode: int = 2, frame_ms: int = 20
     for (s, e) in idx:
         chunk = pcm[2 * s:2 * e]  # 2 bytes per sample
         speech.append(vad.is_speech(chunk, sr))
+
     return np.array(speech, dtype=bool), idx, hop
 
 
@@ -91,11 +73,9 @@ def extract_acoustic_features(y: np.ndarray, sr: int, frame_len: int = 2048, hop
     return rms_db, flatness, flux, zcr
 
 
-def mask_to_segments(mask: np.ndarray, hop_s: float, min_ms: int = 0, merge_gap_ms: int = 0) -> List[Tuple[float, float]]:
+def mask_to_segments(mask: np.ndarray, hop_s: float) -> List[Tuple[float, float]]:
     """
     Convert a boolean frame mask to merged time segments.
-    - min_ms: drop very short blips, keep segments ≥ this length, 0 means no filtering
-    - merge_gap_ms: join segments separated by short gaps, join segments ≤ this gap apart, 0 means no merging
     """
     n = len(mask)
     # Find contiguous runs
@@ -111,26 +91,10 @@ def mask_to_segments(mask: np.ndarray, hop_s: float, min_ms: int = 0, merge_gap_
         else:
             i += 1
 
-    # Merge close runs
-    merged: List[Tuple[int, int]] = []
-    gap_hops = int(round(merge_gap_ms / 1000.0 / hop_s))
-    for r in runs:
-        if not merged:
-            merged.append(r)
-            continue
-        ps, pe = merged[-1]
-        cs, ce = r
-        if cs - pe <= gap_hops:
-            merged[-1] = (ps, ce)
-        else:
-            merged.append(r)
-
     # Filter by min length and convert to seconds
     out: List[Tuple[float, float]] = []
-    min_hops = int(round(min_ms / 1000.0 / hop_s))
-    for s, e in merged:
-        if (e - s) >= min_hops:
-            out.append((s * hop_s, e * hop_s))
+    for s, e in runs:
+        out.append((s * hop_s, e * hop_s))
     return out
 
 
@@ -142,8 +106,6 @@ def detect_acoustic_events_in_speech(
     flat_th: float = 0.35,   # higher -> only very noisy textures are marked
     flux_z: float = 1.5,    # controls sensitivity to sudden changes
     zcr_th: float = 0.2,  # controls detection of crackles / high-frequency artifacts
-    min_ms: int = 30,      # minimum event length to keep
-    merge_gap_ms: int = 120,  # merge events separated by less than this gap
 ) -> List[Tuple[float, float]]:
     """
     Detect artifact/noise events *within* speech regions by combining features.
@@ -161,7 +123,7 @@ def detect_acoustic_events_in_speech(
     defect = (loud & (flatness > flat_th)) | (flux_zscore > flux_z) | (zcr > zcr_th)
 
     hop_s = hop_len / sr
-    acoustic_events = mask_to_segments(defect, hop_s, min_ms, merge_gap_ms)
+    acoustic_events = mask_to_segments(defect, hop_s)
     return acoustic_events
 
 # =========================
@@ -196,8 +158,6 @@ def analyze_recording(
         flat_th=flat_th,
         flux_z=flux_z,
         zcr_th=zcr_th,
-        min_ms=30,             # keep short min here; we'll shape spans later
-        merge_gap_ms=120
     )
 
     return events

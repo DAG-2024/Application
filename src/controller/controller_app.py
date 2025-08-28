@@ -73,22 +73,16 @@ async def feed_audio(file: UploadFile = File(...)):
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
 
-        tokens, noise_spans = build_word_tokens_of_detection(
+        tokens = build_word_tokens_of_detection(
             wav_path=AUDIO_PATH,
             whisper_json_or_path=whisper_result,
             # context anomalies:
             anomaly_word_idx=anomaly_idxs,
-            # optional tuning:
-            low_conf_th = 0.58,  # upper bound threshhold
-            w_conf_w = 0.85,  # weight for low-confidence term
-            acoustic_w =  0.30,  # weight for acoustic-overlap term
-            anomaly_w = 0.40,  # weight for anomaly flag
-            synth_score_th = 0.60,  # final score threshold for resynthesis
         )
 
         app_logger.debug(f"Wordtokens: {tokens}")
-        app_logger.debug(f"Noise_spans: {noise_spans}")
 
+        # Predict and fill [blank] words
         # tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
 
         return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})

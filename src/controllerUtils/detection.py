@@ -76,7 +76,7 @@ def load_whisper_words(whisper_json: Dict[str, Any]) -> List[Word]:
             text = w.get("word") or w.get("text") or ""
             start = float(w.get("start", seg.get("start", 0.0)))
             end = float(w.get("end", seg.get("end", start)))
-            conf = w.get("confidence", None)
+            conf = w.get("score", None)
             if conf is not None:
                 conf = float(conf)
             words.append(Word(text=text.strip(), start=start, end=end, confidence=conf))
@@ -92,14 +92,22 @@ def build_word_tokens_of_detection(
     whisper_json_or_path,
     # VAD + fusion tuning
     low_conf_th: float = 0.58,
-    vad_mode: int = 2,
+    vad_mode: int = 3,
     # Context anomalies:
     anomaly_word_idx: Optional[Iterable[int]] = None,  # words to replace with [blank]
     # Calculated fusion weights / threshold:
-    w_conf_w: float = 0.55,        # weight for low-confidence term
+    w_conf_w: float = 0.70,        # weight for low-confidence term
     acoustic_w: float = 0.30,      # weight for acoustic-overlap term
-    anomaly_w: float = 0.40,       # weight for anomaly flag
+    anomaly_w: float = 0.70,       # weight for anomaly flag
     synth_score_th: float = 0.60,  # final score threshold for resynthesis
+    # Frame indices for VAD + acoustic analysis
+    frame_ms: float = 10,          # frame size in ms
+    hop_ms: float = 5,            # hop size in ms
+    # Acoustic insertion parameters
+    rms_db_boost: float = 10.0,  # how much louder than the background a frame must be to count as “loud.”
+    flat_th: float = 0.55,  # higher → only very noisy textures are marked.
+    flux_z: float = 3,  # controls sensitivity to sudden changes, higher → less sensitive.
+    zcr_th: float = 0.5,  # controls detection of crackles / high-frequency artifacts.
 ):
     """
     High-level helper that:
@@ -128,11 +136,24 @@ def build_word_tokens_of_detection(
     # --- 1) Run the acoustic analysis ---
     acoustic_events = analyze_recording(
         wav_path=wav_path,
+        rms_db_boost = rms_db_boost,  # how much louder than the background a frame must be to count as “loud.”
+        flat_th = flat_th,      # higher → only very noisy textures are marked.
+        flux_z = flux_z,        # controls sensitivity to sudden changes.
+        zcr_th = zcr_th,        # controls detection of crackles / high-frequency artifacts.
+        hop_ms = hop_ms      # hop size in ms
     )
 
-    detection_logger.debug(f"Acoustic events with vad: {acoustic_events}")
+    # --- 2) Quick lookup for acoustic overlap per word
+    detection_logger.debug(f"Computed {len(acoustic_events)} defect intervals from acoustic analysis.")
+    detection_logger.debug(f"Defect intervals: {acoustic_events}")
 
-    # --- 2) Load Whisper words in canonical order (defines indices) ---
+    def acoustic_overlap(t0: float, t1: float) -> float:
+        ov = 0.0
+        for iv in acoustic_events:
+            ov += _overlap_seconds((t0, t1), iv)
+        return ov
+
+    # --- 3) Load Whisper words in canonical order (defines indices) ---
     if isinstance(whisper_json_or_path, str):
         with open(whisper_json_or_path, "r", encoding="utf-8") as f:
             whisper_json = json.load(f)
@@ -142,35 +163,23 @@ def build_word_tokens_of_detection(
 
     detection_logger.debug(f"Loaded {len(words)} words from Whisper JSON.")
 
-    # --- 3) VAD speech intervals for is_speech decisions ---
+    # --- 4) VAD speech intervals for is_speech decisions ---
     y, sr = librosa.load(wav_path, sr=16000, mono=True)
-    vad_mask, _, hop_len = webrtc_speech_mask(y, sr, mode=vad_mode)
+    vad_mask, _, hop_len = webrtc_speech_mask(y, sr, mode=vad_mode, frame_ms=frame_ms, hop_ms=hop_ms)
     hop_s = hop_len / sr
     speech_intervals = mask_to_segments(vad_mask, hop_s)
 
     detection_logger.debug(f"Computed {len(speech_intervals)} speech intervals from VAD.")
     detection_logger.debug(f"Speech intervals: {speech_intervals}")
 
-    def is_speech_interval(t0: float, t1: float, min_overlap: float = 0.2) -> bool:
-        """Consider speech if ≥20 ms overlaps VAD=Speech."""
+    def is_speech_interval(t0: float, t1: float, min_overlap: float = 0.2, percentage: bool = False) -> bool:
         for iv in speech_intervals:
-            if _overlap_seconds((t0, t1), iv) >= min_overlap:
+            ov = _overlap_seconds((t0, t1), iv)
+            if percentage and ov / (t1 - t0) >= min_overlap: # Consider speach of overlaps % min_overlap of VAD
+                return True
+            if not percentage and ov >= min_overlap:    # Consider speech if ≥ min_overlap overlaps VAD=Speech.
                 return True
         return False
-
-    # --- 4) Quick lookup for acoustic overlap per word (from action spans) ---
-    # We compute the total overlap with *acoustic* spans (where defects live).
-    # (Not using the fused label directly—we want overlap seconds for scoring.)
-    defect_intervals = [(s[0], s[1]) for s in acoustic_events]
-
-    detection_logger.debug(f"Computed {len(defect_intervals)} defect intervals from acoustic analysis.")
-    detection_logger.debug(f"Defect intervals: {defect_intervals}")
-
-    def acoustic_overlap(t0: float, t1: float) -> float:
-        ov = 0.0
-        for iv in defect_intervals:
-            ov += _overlap_seconds((t0, t1), iv)
-        return ov
 
     # --- 5) Prepare anomaly index sets ---
     word_anom: Set[int] = set(int(i) for i in (anomaly_word_idx or []))
@@ -188,29 +197,29 @@ def build_word_tokens_of_detection(
     # --- 7) Score + decide per existing word ---
     tokens: List[WordToken] = []
     prev_end = 0.0
-
+    gaps = []
     for i, w in enumerate(words):
 
-        # Check for possible missed word and insert [blank] if needed
-        word_in_gap = is_speech_interval(prev_end, w.start)
-        gap_ov = acoustic_overlap(prev_end, w.start)
-        loud_gap = _clamp(gap_ov / (w.start - prev_end + 1e-6), 0.0, 1.0) >= 0.3 # ≥30% of gap is acoustic defect
-
-        if (word_in_gap or loud_gap) and (w.start - prev_end) >= min_word_len:
-            tokens.append(
-                WordToken(
-                    start=prev_end,
-                    end=w.start,
-                    text="[blank]",
-                    to_synth=True,
-                    is_speech=True,
-                    synth_path=None,
-                )
-            )
+        # # Check for possible missed word and insert [blank] if needed
+        # word_in_gap = is_speech_interval(prev_end, w.start, min_overlap= 0.9, percentage = True)
+        # gap_ov = acoustic_overlap(prev_end, w.start)
+        # loud_gap = gap_ov / (w.start - prev_end) >= 0.9
+        #
+        # if (word_in_gap or loud_gap) and (w.start - prev_end) >= min_word_len:
+        #     gaps.append((word_in_gap, loud_gap))
+        #     tokens.append(
+        #         WordToken(
+        #             start=prev_end,
+        #             end=w.start,
+        #             text="[blank]",
+        #             to_synth=True,
+        #             is_speech=True,
+        #             synth_path=None,
+        #         )
+        #     )
 
         # Confidence normalization
-        conf_raw = w.confidence if (w.confidence is not None) else 0.5
-        conf_norm = _clamp(conf_raw, 0.0, 1.0)
+        conf = w.confidence <= low_conf_th
 
         # Acoustic overlap normalized to ~0..1 using a 150ms scale
         ov = acoustic_overlap(w.start, w.end)
@@ -220,7 +229,7 @@ def build_word_tokens_of_detection(
         in_anomaly = 1.0 if i in word_anom else 0.0
 
         # Final score
-        score = (w_conf_w * (1.0 - conf_norm)) + (acoustic_w * overlap_norm) + (anomaly_w * in_anomaly)
+        score = (w_conf_w * (1.0 - conf)) + (acoustic_w * overlap_norm) + (anomaly_w * in_anomaly)
 
         to_synth = (score >= synth_score_th)
 
@@ -240,6 +249,9 @@ def build_word_tokens_of_detection(
         )
 
         prev_end = w.end
+
+    detection_logger.debug(f"Found: {len(gaps)} gaps")
+    detection_logger.debug(f"gaps: {gaps}")
 
     # --- 8) Merge and sort all tokens by time ---
     tokens.sort(key=lambda t: (t.start, t.end))
