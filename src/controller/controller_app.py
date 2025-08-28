@@ -6,16 +6,19 @@ from fastapi.responses import JSONResponse
 import shutil
 import uvicorn
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers = [
-        logging.FileHandler("app.log"),  # Logs will be written to 'app.log'
-        logging.StreamHandler()  # Logs will still be printed to the console
-    ]
-)
-logger = logging.getLogger(__name__)
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+app_logger = logging.getLogger("controller_app")
+app_logger.setLevel(logging.DEBUG)
+
+if not app_logger.handlers:
+    file_handler = logging.FileHandler(os.path.join(log_dir, "app.log"))
+    stream_handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    app_logger.addHandler(file_handler)
+    app_logger.addHandler(stream_handler)
 
 # Ensure the parent directory is in the path to import controllerUtils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -75,7 +78,6 @@ async def feed_audio(file: UploadFile = File(...)):
             whisper_json_or_path=whisper_result,
             # context anomalies:
             anomaly_word_idx=anomaly_idxs,
-            anomaly_gap_idx=[],
             # optional tuning:
             low_conf_th = 0.58,  # upper bound threshhold
             w_conf_w = 0.85,  # weight for low-confidence term
@@ -84,14 +86,14 @@ async def feed_audio(file: UploadFile = File(...)):
             synth_score_th = 0.60,  # final score threshold for resynthesis
         )
 
-        logger.debug(f"Wordtokens: {tokens}")
-        logger.debug(f"Noise_spans: {noise_spans}")
+        app_logger.debug(f"Wordtokens: {tokens}")
+        app_logger.debug(f"Noise_spans: {noise_spans}")
 
         # tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
 
         return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        app_logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 

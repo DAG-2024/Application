@@ -14,7 +14,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers = [
-        logging.FileHandler("stitcher.log"),  # Logs will be written to 'app.log'
+        logging.FileHandler("log/stitcher.log"),  # Logs will be written to 'app.log'
         logging.StreamHandler()  # Logs will still be printed to the console
     ]
 )

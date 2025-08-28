@@ -64,7 +64,6 @@ def word_predictor(transcription: str):
 
 import re
 from typing import List, Tuple, Callable, Optional
-from dataclasses import dataclass
 from stitcher.models.stitcherModels import WordToken, wordtokens_to_json
 
 # -------------------------------

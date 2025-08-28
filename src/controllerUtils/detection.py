@@ -6,11 +6,26 @@ import numpy as np
 import librosa
 
 from .noise_event_detection import (
-    analyze_recording_with_whisper_fusion,
-    load_whisper_words,
+    analyze_recording,
     webrtc_speech_mask,
-    evaluate_word_masking
 )
+
+import logging
+import os
+
+# Configure logging
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+detection_logger = logging.getLogger("detection")
+detection_logger.setLevel(logging.DEBUG)
+
+# Avoid adding multiple handlers if re-imported
+if not detection_logger.handlers:
+    file_handler = logging.FileHandler(os.path.join(log_dir, "detection.log"))
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler.setFormatter(formatter)
+    detection_logger.addHandler(file_handler)
+
 
 # ------------------------------------------------------------
 # Adapter: produce your WordToken list from audio + whisper JSON
@@ -38,6 +53,52 @@ def _overlap_seconds(a: Tuple[float, float], b: Tuple[float, float]) -> float:
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
+# =========================
+# Whisper JSON ingestion
+# =========================
+
+def load_whisper_words(whisper_json: Dict[str, Any]) -> List[Word]:
+    """
+    Parse Whisper JSON to a list of Word objects.
+    Expected formats:
+      - whisper.cpp / faster-whisper often expose segment.words with {word, start, end, confidence}
+      - openai-whisper may not provide words; then we approximate by splitting by spaces per segment.
+
+    NOTE: If no confidences are present, confidence is set to None (caller must handle).
+    """
+    words: List[Word] = []
+
+    segments = whisper_json.get("segments", [])
+    for seg in segments:
+        # Case 1: words present
+        if "words" in seg and isinstance(seg["words"], list) and len(seg["words"]) > 0:
+            for w in seg["words"]:
+                # Some flavors use "word" (string with leading space), others "text".
+                text = w.get("word") or w.get("text") or ""
+                start = float(w.get("start", seg.get("start", 0.0)))
+                end = float(w.get("end", seg.get("end", start)))
+                conf = w.get("confidence", None)
+                if conf is not None:
+                    conf = float(conf)
+                words.append(Word(text=text.strip(), start=start, end=end, confidence=conf))
+        else:
+            # Case 2: no words -> approximate by distributing segment time over whitespace-separated tokens
+            seg_text = (seg.get("text") or "").strip()
+            seg_start = float(seg.get("start", 0.0))
+            seg_end = float(seg.get("end", seg_start))
+            tokens = [t for t in seg_text.split() if t]
+            if not tokens or seg_end <= seg_start:
+                continue
+            dur = seg_end - seg_start
+            step = dur / max(1, len(tokens))
+            for i, tok in enumerate(tokens):
+                w_start = seg_start + i * step
+                w_end = min(seg_end, w_start + step)
+                # No confidences available -> None
+                words.append(Word(text=tok, start=w_start, end=w_end, confidence=None))
+    return words
+
+
 # ------------------------------------------------------------
 # Adapter: context anomalies + [blank] replacement/insertion
 # ------------------------------------------------------------
@@ -50,23 +111,11 @@ def build_word_tokens_of_detecation(
     vad_mode: int = 2,
     # Context anomalies:
     anomaly_word_idx: Optional[Iterable[int]] = None,  # words to replace with [blank]
-    anomaly_gap_idx: Optional[Iterable[int]] = None,   # insert [blank] between k and k+1
     # Calculated fusion weights / threshold:
     w_conf_w: float = 0.55,        # weight for low-confidence term
     acoustic_w: float = 0.30,      # weight for acoustic-overlap term
     anomaly_w: float = 0.40,       # weight for anomaly flag
     synth_score_th: float = 0.60,  # final score threshold for resynthesis
-    # Inserted [blank] shaping:
-    insert_min_window: float = 0.06,  # if gap too small, create this duration
-    insert_margin: float = 0.015,     # margin away from neighbors (s)
-    # Masking knobs
-    mask_score_th: float = 0.65,   # ≥ th => force synth + [blank]
-    vad_non_speech_frac: float = 0.60,
-    low_speech_band_frac: float = 0.35,
-    high_flatness: float = 0.50,
-    very_low_rms_db: float = -40.0,
-    very_high_rms_db: float = -2.0,
-    low_pitch_conf_frac: float = 0.70,
 ):
     """
     High-level helper that:
@@ -77,12 +126,7 @@ def build_word_tokens_of_detecation(
 
     anomaly_word_idx:
         Indices of words (0-based, order defined by parsed Whisper words) that are wrong and
-        should be replaced with [blank].
-
-    anomaly_gap_idx:
-        Indices 'k' meaning "insert a [blank] between words[k] and words[k+1]".
-        If k is -1, we treat it as insertion *before* the first word; if k == len(words)-1,
-        insertion *after* the last word (edge cases handled).
+        should be replaced with [blank]
 
     Decision score (per word):
         score = w_conf_w * (1 - conf_norm) + acoustic_w * overlap_norm + anomaly_w * is_in_anomaly
@@ -98,12 +142,14 @@ def build_word_tokens_of_detecation(
           centered between them, trimmed by insert_margin from neighbors.
     """
     # --- 1) Run the fused acoustic analysis ---
-    acoustic_events, action_spans = analyze_recording_with_whisper_fusion(
+    acoustic_events, vad_events = analyze_recording(
         wav_path=wav_path,
         whisper_json_or_path=whisper_json_or_path,
         vad_mode=vad_mode,
         low_conf_th=low_conf_th,
     )
+
+    detection_logger.debug(f"Acoustic events: {acoustic_events}")
 
     # --- 2) Load Whisper words in canonical order (defines indices) ---
     if isinstance(whisper_json_or_path, str):
@@ -113,11 +159,16 @@ def build_word_tokens_of_detecation(
         whisper_json = whisper_json_or_path
     words = load_whisper_words(whisper_json)   # Word(text,start,end,confidence)
 
+    detection_logger.debug(f"Loaded {len(words)} words from Whisper JSON.")
+
     # --- 3) VAD speech intervals for is_speech decisions ---
     y, sr = librosa.load(wav_path, sr=16000, mono=True)
     vad_mask, _, hop_len = webrtc_speech_mask(y, sr, mode=vad_mode)
     hop_s = hop_len / sr
     speech_intervals = _mask_to_time_intervals(vad_mask, hop_s)
+
+    detection_logger.debug(f"Computed {len(speech_intervals)} speech intervals from VAD.")
+    detection_logger.debug(f"Speech intervals: {speech_intervals}")
 
     def is_speech_interval(t0: float, t1: float) -> bool:
         """Consider speech if ≥20 ms overlaps VAD=Speech."""
@@ -143,25 +194,6 @@ def build_word_tokens_of_detecation(
     # Clip indices to range
     word_anom = {i for i in word_anom if 0 <= i < len(words)}
 
-    if anomaly_gap_idx is not None:
-        gap_anom: Set[int] = set(int(i) for i in (anomaly_gap_idx or []))
-        # Clip indices to range
-        # gaps can be -1 (before first) .. len(words)-1 (after last)
-        gap_anom = {i for i in gap_anom if -1 <= i <= len(words) - 1}
-    else:
-        gap_anom: Set[int] = set()
-
-    # --- 5) Word-level masking detection (catches fully masked words) ---
-    mask_scores = evaluate_word_masking(
-        y=y, sr=sr, words=words, vad_mask=vad_mask, hop_len=hop_len,
-        vad_non_speech_frac=vad_non_speech_frac,
-        low_speech_band_frac=low_speech_band_frac,
-        high_flatness=high_flatness,
-        very_low_rms_db=very_low_rms_db,
-        very_high_rms_db=very_high_rms_db,
-        low_pitch_conf_frac=low_pitch_conf_frac,
-    )
-
     # --- 6) Score + decide per existing word ---
     tokens: List[WordToken] = []
     for i, w in enumerate(words):
@@ -173,16 +205,13 @@ def build_word_tokens_of_detecation(
         ov = acoustic_overlap(w.start, w.end)
         overlap_norm = _clamp(ov / 0.15, 0.0, 1.0)
 
-
-        masked = (mask_scores[i] >= mask_score_th)
-
         # Anomaly flag
         in_anomaly = 1.0 if i in word_anom else 0.0
 
         # Final score
         score = (w_conf_w * (1.0 - conf_norm)) + (acoustic_w * overlap_norm) + (anomaly_w * in_anomaly)
 
-        to_synth = (score >= synth_score_th) or masked
+        to_synth = (score >= synth_score_th)
 
         # If this word is flagged as context-anomalous AND we’re synthesizing,
         # we *replace its text* with "[blank]" to be filled later by GPT->TTS.
@@ -199,70 +228,10 @@ def build_word_tokens_of_detecation(
             )
         )
 
-    # --- 7) Insert [blank] tokens for requested gaps ---
-    # We insert *after* building the base list so indices referenced by the caller
-    # remain stable (we’ll sort by time afterwards).
-    inserted: List[WordToken] = []
+    # --- 7) Merge and sort all tokens by time ---
+    tokens.sort(key=lambda t: (t.start, t.end))
 
-    def make_insert_token(left_end: float, right_start: float) -> Tuple[float, float]:
-        """
-        Decide the time window for an inserted token between (left_end, right_start).
-        If natural gap is sufficient, use it with margins; else synthesize a small
-        window centered between neighbors.
-        """
-        natural_gap = max(0.0, right_start - left_end)
-        if natural_gap >= max(insert_min_window, 2 * insert_margin):
-            s = left_end + insert_margin
-            e = right_start - insert_margin
-            return s, e
-        # Create synthetic centered window
-        mid = (left_end + right_start) / 2.0
-        half = insert_min_window / 2.0
-        s = mid - half
-        e = mid + half
-        # Clamp so we don't cross neighbors too much
-        s = max(s, left_end + 1e-3)
-        e = min(e, right_start - 1e-3) if right_start > left_end else s + insert_min_window
-        if e <= s:
-            e = s + insert_min_window
-        return s, e
-
-    for k in sorted(gap_anom):
-        if len(words) == 0:
-            # No words at all: place a token at t=0..insert_min_window
-            s, e = 0.0, insert_min_window
-        elif k == -1:
-            # Insert before first word
-            right_start = words[0].start
-            left_end = max(0.0, right_start - insert_min_window)  # fabricate a left boundary
-            s, e = make_insert_token(left_end, right_start)
-        elif k == len(words) - 1:
-            # Insert after last word
-            left_end = words[-1].end
-            right_start = left_end + insert_min_window  # fabricate a right boundary
-            s, e = make_insert_token(left_end, right_start)
-        else:
-            # Insert between words[k] and words[k+1]
-            left_end = words[k].end
-            right_start = words[k + 1].start
-            s, e = make_insert_token(left_end, right_start)
-
-        inserted.append(
-            WordToken(
-                start=float(s),
-                end=float(e),
-                text="[blank]",
-                to_synth=True,  # insertion must be synthesized
-                is_speech=is_speech_interval(s, e),
-                synth_path=None,
-            )
-        )
-
-    # --- 8) Merge and sort all tokens by time ---
-    all_tokens = tokens + inserted
-    all_tokens.sort(key=lambda t: (t.start, t.end))
-
-    # --- 9) Optional: return acoustic spans for denoisers ---
+    # --- 8) Optional: return acoustic spans for denoisers ---
     noise_spans = [(ev.start, ev.end) for ev in acoustic_events]
 
-    return all_tokens, noise_spans
+    return tokens, noise_spans
