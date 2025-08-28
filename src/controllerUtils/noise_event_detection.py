@@ -254,6 +254,91 @@ def load_whisper_words(whisper_json: Dict[str, Any]) -> List[Word]:
                 words.append(Word(text=tok, start=w_start, end=w_end, confidence=None))
     return words
 
+# =========================
+# word-masking evaluator
+# =========================
+
+def _band_energy_ratio(S_mag, sr, fmin=300, fmax=3400):
+    """
+    Fraction of energy inside [fmin,fmax] vs. full band for each frame.
+    S_mag: |STFT| with shape [freq_bins, frames]
+    """
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=(S_mag.shape[0]-1)*2)
+    band = (freqs >= fmin) & (freqs <= fmax)
+    num = (S_mag[band, :]**2).sum(axis=0)
+    den = (S_mag**2).sum(axis=0) + 1e-12
+    return (num / den).astype(float)
+
+def _pitch_confidence(y, sr, frame_length, hop_length):
+    """
+    Simple pitch 'confidence': normalized peak of autocorrelation via YIN.
+    librosa.yin returns f0; use voiced/unvoiced proxy via f0 > 0.
+    """
+    f0 = librosa.yin(y, fmin=50, fmax=500, sr=sr, frame_length=frame_length, hop_length=hop_length)
+    # Confidence proxy: voiced=1, unvoiced=0
+    conf = (~np.isnan(f0)).astype(float)
+    return conf
+
+def evaluate_word_masking(
+    y, sr, words, vad_mask, hop_len,
+    n_fft=2048, win_len=None,
+    # thresholds
+    vad_non_speech_frac=0.6,        # ≥60% of frames non-speech inside the word
+    low_speech_band_frac=0.35,      # speech-band energy ratio below this is suspicious
+    high_flatness=0.5,              # flatness above => noise-like
+    very_low_rms_db=-40.0,          # dropouts
+    very_high_rms_db=-2.0,          # clipping/saturation relative to max
+    low_pitch_conf_frac=0.7,        # ≥70% frames unvoiced
+):
+    """
+    For each word window, compute a masking score ∈ [0,1] by combining cues:
+      - VAD says non-speech most of the time
+      - Speech-band energy ratio very low
+      - Spectral flatness high (noise-like)
+      - RMS too low or too close to max (saturated)
+      - Pitch confidence low (unvoiced) across the window
+    """
+    win_len = win_len or n_fft
+    # STFT once
+    S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop_len, win_length=win_len)) + 1e-10
+    rms = librosa.feature.rms(S=S).squeeze()
+    rms_db = librosa.amplitude_to_db(rms, ref=np.max)
+    flat = librosa.feature.spectral_flatness(S=S).squeeze()
+    band_frac = _band_energy_ratio(S, sr, 300, 3400)
+    pitch_conf = _pitch_confidence(y, sr, win_len, hop_len)  # 1=voiced, 0=unvoiced
+
+    hop_s = hop_len / sr
+    scores = []
+
+    for w in words:
+        f0 = int(np.floor(w.start / hop_s))
+        f1 = max(f0+1, int(np.ceil(w.end / hop_s)))
+        f0 = max(0, min(f0, len(rms_db)-1))
+        f1 = max(1, min(f1, len(rms_db)))
+
+        # Fractions over the word window
+        vad_ns_frac   = 1.0 - float(vad_mask[f0:f1].mean()) if (f1>f0) else 1.0
+        band_med      = float(np.median(band_frac[f0:f1])) if (f1>f0) else 0.0
+        flat_med      = float(np.median(flat[f0:f1])) if (f1>f0) else 0.0
+        rms_med_db    = float(np.median(rms_db[f0:f1])) if (f1>f0) else -80.0
+        unvoiced_frac = float((1.0 - pitch_conf[f0:f1]).mean()) if (f1>f0) else 1.0
+
+        # Normalize each cue to [0,1] "badness"
+        c_vad  = 1.0 if vad_ns_frac >= vad_non_speech_frac else vad_ns_frac / vad_non_speech_frac
+        c_band = 1.0 if band_med <= low_speech_band_frac else max(0.0, (low_speech_band_frac - band_med) / low_speech_band_frac)
+        c_flat = 1.0 if flat_med >= high_flatness else flat_med / high_flatness
+        # rms bad if very low OR (near 0 dBFS relative peak) -> map two tails
+        low_tail  = 1.0 if rms_med_db <= very_low_rms_db else max(0.0, (very_low_rms_db - rms_med_db) / abs(very_low_rms_db))
+        high_tail = 1.0 if rms_med_db >= very_high_rms_db else max(0.0, (rms_med_db - very_high_rms_db) / 6.0)
+        c_rms = max(low_tail, high_tail)
+        c_pitch = 1.0 if unvoiced_frac >= low_pitch_conf_frac else unvoiced_frac / low_pitch_conf_frac
+
+        # Combine (weights sum to 1). Boost VAD+band (strong indicators of masking)
+        score = 0.30*c_vad + 0.30*c_band + 0.20*c_flat + 0.10*c_rms + 0.10*c_pitch
+        scores.append(float(np.clip(score, 0.0, 1.0)))
+
+    return scores
+
 
 # =========================
 # Fusion logic
@@ -487,42 +572,3 @@ def analyze_recording_with_whisper_fusion(
     )
 
     return events, spans
-
-
-# =========================
-# CLI example
-# =========================
-"""
-if __name__ == "__main__":
-    # Usage:
-    #   python defect_fusion.py path/to/audio.wav path/to/whisper.json
-    # 
-    # The script prints:
-    #   - Acoustic defect events (timestamps)
-    #   - Final action spans with labels and confidence stats
-    import sys
-    wav_path = sys.argv[1] if len(sys.argv) > 1 else "example.wav"
-    whisper_path = sys.argv[2] if len(sys.argv) > 2 else "whisper.json"
-
-    acoustic_events, action_spans = analyze_recording_with_whisper_fusion(
-        wav_path=wav_path,
-        whisper_json_or_path=whisper_path
-    )
-
-    print("\n=== Acoustic defect events (inside speech) ===")
-    for ev in acoustic_events:
-        print(f"{ev.start:.3f}s → {ev.end:.3f}s")
-
-    print("\n=== Action spans (what to do) ===")
-    for s in action_spans:
-        words_str = " ".join(w.text for w in s.words[:8])
-        if len(s.words) > 8:
-            words_str += " ..."
-        print(
-            f"[{s.label}] {s.start:.3f}s → {s.end:.3f}s | "
-            f"avg_conf={None if s.avg_conf is None else round(s.avg_conf, 3)} "
-            f"min_conf={None if s.min_conf is None else round(s.min_conf, 3)} "
-            f"overlap={round(s.overlap_ratio, 2)} | "
-            f"words: {words_str}"
-        )
-"""

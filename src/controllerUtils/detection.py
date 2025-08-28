@@ -5,10 +5,11 @@ import json
 import numpy as np
 import librosa
 
-from noise_event_detection import (
+from .noise_event_detection import (
     analyze_recording_with_whisper_fusion,
     load_whisper_words,
     webrtc_speech_mask,
+    evaluate_word_masking
 )
 
 # ------------------------------------------------------------
@@ -58,6 +59,14 @@ def build_word_tokens_of_detecation(
     # Inserted [blank] shaping:
     insert_min_window: float = 0.06,  # if gap too small, create this duration
     insert_margin: float = 0.015,     # margin away from neighbors (s)
+    # Masking knobs
+    mask_score_th: float = 0.65,   # ≥ th => force synth + [blank]
+    vad_non_speech_frac: float = 0.60,
+    low_speech_band_frac: float = 0.35,
+    high_flatness: float = 0.50,
+    very_low_rms_db: float = -40.0,
+    very_high_rms_db: float = -2.0,
+    low_pitch_conf_frac: float = 0.70,
 ):
     """
     High-level helper that:
@@ -142,6 +151,17 @@ def build_word_tokens_of_detecation(
     else:
         gap_anom: Set[int] = set()
 
+    # --- 5) Word-level masking detection (catches fully masked words) ---
+    mask_scores = evaluate_word_masking(
+        y=y, sr=sr, words=words, vad_mask=vad_mask, hop_len=hop_len,
+        vad_non_speech_frac=vad_non_speech_frac,
+        low_speech_band_frac=low_speech_band_frac,
+        high_flatness=high_flatness,
+        very_low_rms_db=very_low_rms_db,
+        very_high_rms_db=very_high_rms_db,
+        low_pitch_conf_frac=low_pitch_conf_frac,
+    )
+
     # --- 6) Score + decide per existing word ---
     tokens: List[WordToken] = []
     for i, w in enumerate(words):
@@ -153,14 +173,16 @@ def build_word_tokens_of_detecation(
         ov = acoustic_overlap(w.start, w.end)
         overlap_norm = _clamp(ov / 0.15, 0.0, 1.0)
 
+
+        masked = (mask_scores[i] >= mask_score_th)
+
         # Anomaly flag
         in_anomaly = 1.0 if i in word_anom else 0.0
 
         # Final score
         score = (w_conf_w * (1.0 - conf_norm)) + (acoustic_w * overlap_norm) + (anomaly_w * in_anomaly)
 
-        # Decide synth:
-        to_synth = (score >= synth_score_th)
+        to_synth = (score >= synth_score_th) or masked
 
         # If this word is flagged as context-anomalous AND we’re synthesizing,
         # we *replace its text* with "[blank]" to be filled later by GPT->TTS.

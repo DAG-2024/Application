@@ -60,53 +60,36 @@ async def feed_audio(file: UploadFile = File(...)):
     USE_NOISE_MASKING = True
     
     try:
+
+
         whisper_result = transcribe(AUDIO_PATH)
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
-        print_low_confidence_words(whisper_result, CONF_THRESH)
-
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
-        logger.debug(f"Whisper Transcription: {whisper_transcription}")
-        logger.debug(f"Indexed Transcription: {indexed_transcription}")
-        logger.debug(f"anomaly_res: {anomaly_res.choices[0].message.content}")
-
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
-
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
-        logger.debug(f"anomaly_idxs - 1 : {anomaly_idxs}")
 
+        tokens, noise_spans = build_word_tokens_of_detecation(
+            wav_path=AUDIO_PATH,
+            whisper_json_or_path=whisper_result,
+            # context anomalies:
+            anomaly_word_idx=anomaly_idxs,
+            anomaly_gap_idx=[],
+            # optional tuning:
+            low_conf_th = 0.58,  # upper bound threshhold
+            w_conf_w = 0.85,  # weight for low-confidence term
+            acoustic_w =  0.30,  # weight for acoustic-overlap term
+            anomaly_w = 0.40,  # weight for anomaly flag
+            synth_score_th = 0.60,  # final score threshold for resynthesis
+        )
 
-        if USE_LOW_CONF_INTERSECTION:
-            anomaly_idxs_intersect = intersect_with_low_confidence_score(whisper_result, anomaly_idxs, thresh=CONF_THRESH)
-        else:
-            anomaly_idxs_intersect = anomaly_idxs
-        logger.debug(f"anomaly_idxs after confidence score - 2 : {anomaly_idxs_intersect}")
+        logger.debug(f"Wordtokens: {tokens}")
+        logger.debug(f"Noise_spans: {noise_spans}")
 
-        words_after_anomaly_mask = insert_blank_and_modify_timestamp(whisper_result, anomaly_idxs_intersect)
+        # tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
 
-        logger.debug(f"anomaly_idxs after words_after_anomaly_mask - # : {words_after_anomaly_mask}")
-
-        if USE_NOISE_MASKING:
-            energy_segments = detect_energy(AUDIO_PATH)
-            words_after_noise_mask = adjust_by_noise_segments(words_after_anomaly_mask, energy_segments)
-        else:
-            energy_segments = []
-            words_after_noise_mask = words_after_anomaly_mask
-
-
-        logger.debug(f"anomaly_idxs after noise masking - 4 : {words_after_noise_mask}")
-
-
-        blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
-
-        logger.debug(f"Blank Inserted Transcription: : {blank_inserted_trans}")
-        predicted_text = word_predictor(blank_inserted_trans)
-
-        logger.debug(f"Predicted Text: {predicted_text}")
-
-        wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
-        return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
+        return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -149,7 +132,7 @@ def print_low_confidence_words(whisper_res, thresh):
         for word_info in segment.get("words", []):
             if word_info.get("score", 1.0) < thresh:
                 print(f"'{word_info['word']}'  --  score: '{word_info['score']:.2f}'")
-                
+
 def print_loud_noise_segments(segments):
     print("Loud noise detection: \n")
     for segment in segments:
@@ -199,7 +182,7 @@ def adjust_by_noise_segments(all_words, loud_noise_segments):
     Given a flat list of words (all_words) and a list of loud noise intervals,
     replaces words that overlap with '[blank]'. If no words overlap a noise interval,
     inserts a new '[blank]' word in the appropriate position in all_words.
-    
+
     Modifies all_words in-place.
     """
     # Sort all_words by start time to enable ordered insertion

@@ -22,7 +22,9 @@ try:
         result = response.json()
         wordtokens_json = result["wordtokens"]
 
-    json.dump(wordtokens_json, open("wordtokens.json", "w"))
+    word_tokens = json.loads(wordtokens_json)
+    with open('wordtokens.json', 'w') as f:
+        json.dump(word_tokens, f, indent=2)
 
     # 2. Call fix-audio endpoint
     with open(AUDIO_FILE_PATH, "rb") as audio_file:
