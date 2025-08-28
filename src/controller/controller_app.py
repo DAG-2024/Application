@@ -31,7 +31,7 @@ from controllerUtils import (
     ctx_anomaly_detector,
     word_predictor,
 
-    build_word_tokens_of_detecation,
+    build_word_tokens_of_detection,
     predict_and_fill_tokens,
 )
 
@@ -73,7 +73,7 @@ async def feed_audio(file: UploadFile = File(...)):
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
 
-        tokens, noise_spans = build_word_tokens_of_detecation(
+        tokens, noise_spans = build_word_tokens_of_detection(
             wav_path=AUDIO_PATH,
             whisper_json_or_path=whisper_result,
             # context anomalies:

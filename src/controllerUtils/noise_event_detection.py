@@ -18,35 +18,11 @@ Pipeline:
 Author: you :)
 """
 
-from dataclasses import dataclass
 from typing import List, Dict, Any, Tuple, Optional
 import json
 import numpy as np
 import librosa
 import webrtcvad
-
-
-
-# =========================
-# Data structures
-# =========================
-
-@dataclass
-class Word:
-    """Minimal word representation from Whisper output."""
-    text: str
-    start: float
-    end: float
-    confidence: Optional[float]  # Some Whisper builds may not produce confidences
-
-
-@dataclass
-class ProblemSegment:
-    """Acoustic event segment (likely noise/artifact) in seconds."""
-    start: float
-    end: float
-    score: float = 0.0  # optional intensity score if you compute one
-
 
 # =========================
 # Core utilities
@@ -115,11 +91,11 @@ def extract_acoustic_features(y: np.ndarray, sr: int, frame_len: int = 2048, hop
     return rms_db, flatness, flux, zcr
 
 
-def mask_to_segments(mask: np.ndarray, hop_s: float, min_ms: int = 30, merge_gap_ms: int = 120) -> List[ProblemSegment]:
+def mask_to_segments(mask: np.ndarray, hop_s: float, min_ms: int = 0, merge_gap_ms: int = 0) -> List[Tuple[float, float]]:
     """
     Convert a boolean frame mask to merged time segments.
-    - min_ms: drop very short blips
-    - merge_gap_ms: join segments separated by short gaps
+    - min_ms: drop very short blips, keep segments ≥ this length, 0 means no filtering
+    - merge_gap_ms: join segments separated by short gaps, join segments ≤ this gap apart, 0 means no merging
     """
     n = len(mask)
     # Find contiguous runs
@@ -150,25 +126,25 @@ def mask_to_segments(mask: np.ndarray, hop_s: float, min_ms: int = 30, merge_gap
             merged.append(r)
 
     # Filter by min length and convert to seconds
-    out: List[ProblemSegment] = []
+    out: List[Tuple[float, float]] = []
     min_hops = int(round(min_ms / 1000.0 / hop_s))
     for s, e in merged:
         if (e - s) >= min_hops:
-            out.append(ProblemSegment(start=s * hop_s, end=e * hop_s, score=0.0))
+            out.append((s * hop_s, e * hop_s))
     return out
 
 
-def detect_acoustic_events(
+def detect_acoustic_events_in_speech(
     y: np.ndarray,
     sr: int,
     hop_len: int,
-    rms_db_boost: float = 6.0,
-    flat_th: float = 0.35,
-    flux_z: float = 1.5,
-    zcr_th: float = 0.2,
-    min_ms: int = 30,
-    merge_gap_ms: int = 120,
-) -> List[ProblemSegment]:
+    rms_db_boost: float = 6.0,  # how much louder than the background a frame must be to count
+    flat_th: float = 0.35,   # higher -> only very noisy textures are marked
+    flux_z: float = 1.5,    # controls sensitivity to sudden changes
+    zcr_th: float = 0.2,  # controls detection of crackles / high-frequency artifacts
+    min_ms: int = 30,      # minimum event length to keep
+    merge_gap_ms: int = 120,  # merge events separated by less than this gap
+) -> List[Tuple[float, float]]:
     """
     Detect artifact/noise events *within* speech regions by combining features.
     """
@@ -182,67 +158,11 @@ def detect_acoustic_events(
     flux_zscore = (flux - flux.mean()) / (flux.std() + 1e-8)
 
     # A frame is a "defect candidate" if any abnormal feature triggers.
-    problem_mask = (loud & (flatness > flat_th)) | (flux_zscore > flux_z) | (zcr > zcr_th)
+    defect = (loud & (flatness > flat_th)) | (flux_zscore > flux_z) | (zcr > zcr_th)
 
     hop_s = hop_len / sr
-    return mask_to_segments(problem_mask, hop_s, min_ms=min_ms, merge_gap_ms=merge_gap_ms)
-
-# =========================
-# Fusion logic
-# =========================
-
-def interval_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    """
-    Return the length (in seconds) of overlap between intervals a=[a0,a1], b=[b0,b1].
-    """
-    a0, a1 = a
-    b0, b1 = b
-    return max(0.0, min(a1, b1) - max(a0, b0))
-
-
-def label_words_by_fusion(
-    words: List[Word],
-    acoustic_events: List[ProblemSegment],
-    low_conf_th: float = 0.58,            # words below this are suspicious
-    min_overlap_for_effect: float = 0.02, # at least 20 ms overlap to count (avoid 1-frame jitters)
-) -> List[Tuple[Word, str, float]]:
-    """
-    For each word, compute whether it overlaps an acoustic defect and choose a per-word label:
-      - RESYNTHESIZE if low confidence + overlaps defect
-      - NOISE_SUPPRESS if good confidence + overlaps defect
-      - MUMBLE_RESYNTHESIZE if low confidence + no defect
-      - OK otherwise
-
-    Returns:
-      List of (Word, label, overlap_seconds)
-    """
-    labeled = []
-    events = [(e.start, e.end) for e in acoustic_events]
-
-    for w in words:
-        w_iv = (w.start, w.end)
-        ov = 0.0
-        for e in events:
-            ov += interval_overlap(w_iv, e)
-        # Small epsilon to ignore spurious micro-overlaps
-        has_defect = ov >= min_overlap_for_effect
-
-        # Confidence may be None (fallback Whisper) -> treat as "unknown"
-        conf = w.confidence
-        low_conf = (conf is not None) and (conf < low_conf_th)
-
-        if low_conf and has_defect:
-            label = "RESYNTHESIZE"
-        elif (conf is not None) and (not low_conf) and has_defect:
-            label = "NOISE_SUPPRESS"
-        elif low_conf and not has_defect:
-            label = "MUMBLE_RESYNTHESIZE"
-        else:
-            label = "OK"
-
-        labeled.append((w, label, ov))
-    return labeled
-
+    acoustic_events = mask_to_segments(defect, hop_s, min_ms, merge_gap_ms)
+    return acoustic_events
 
 # =========================
 # End-to-end function
@@ -250,47 +170,34 @@ def label_words_by_fusion(
 
 def analyze_recording(
     wav_path: str,
-    vad_mode: int = 2,          # 0 permissive (may let background in), 3 strict (only clean speech).
     # acoustic thresholds
     rms_db_boost: float = 6.0,  # how much louder than the background a frame must be to count as “loud.”
     flat_th: float = 0.35,      # higher → only very noisy textures are marked.
     flux_z: float = 1.5,        # controls sensitivity to sudden changes.
     zcr_th: float = 0.2,        # controls detection of crackles / high-frequency artifacts.
-    min_ms=30,              # minimum duration of an acoustic event to keep (ms)
-    merge_gap_ms=120         # join acoustic events separated by ≤ this gap (ms)
+    hop_ms: int = 10,           # hop size in ms
 
-)  -> Tuple[List[ProblemSegment], List[ProblemSegment]]:
-
+) -> List[Tuple[float, float]]:
     """
     End-to-end analysis:
       - Load audio
-      - VAD -> speech mask
       - Acoustic defects within speech
-      - Load Whisper words
-      - Label words and produce final actionable spans
-
-    Returns:
-      (acoustic_events, action_spans)
     """
 
     # 1) Load audio mono @16k (required for WebRTC VAD)
     y, sr = librosa.load(wav_path, sr=16000, mono=True)
 
-    # 2) Speech mask via VAD
-    vad_mask, _, hop_len = webrtc_speech_mask(y, sr, mode=vad_mode)
+    hop_len = int(sr * hop_ms / 1000)
 
-    hop_s = hop_len / sr
-    vad_events = mask_to_segments(vad_mask, hop_s, min_ms=min_ms, merge_gap_ms=merge_gap_ms)
-
-    # 3) Acoustic defect events restricted to speech
-    acoustic_events = detect_acoustic_events(
+    # 2) Acoustic defect events restricted to speech
+    events = detect_acoustic_events_in_speech(
         y, sr, hop_len,
         rms_db_boost=rms_db_boost,
         flat_th=flat_th,
         flux_z=flux_z,
         zcr_th=zcr_th,
-        min_ms=min_ms,             # keep short min here; we'll shape spans later
-        merge_gap_ms=merge_gap_ms
+        min_ms=30,             # keep short min here; we'll shape spans later
+        merge_gap_ms=120
     )
 
-    return acoustic_events, vad_events
+    return events
