@@ -1,6 +1,8 @@
 import logging
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from .models.stitcherModels import WordToken, FixResponse
 from typing import List
 import uuid, os, requests
@@ -8,6 +10,8 @@ import ffmpeg
 import logging
 import re
 from tempfile import gettempdir
+from fastapi.middleware.cors import CORSMiddleware
+
 
 # Configure logging
 logging.basicConfig(
@@ -21,6 +25,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files directory for serving generated audio files
+app.mount("/static", StaticFiles(directory=gettempdir()), name="static")
 
 
 async def save_upload_file(upload: UploadFile) -> str:
@@ -212,6 +227,15 @@ async def health_check():
         "status": "healthy",
         "message": "Stitcher service is running"
     }
+
+@app.get("/audio/{filename}")
+async def get_audio_file(filename: str):
+    """Serve generated audio files"""
+    file_path = os.path.join(gettempdir(), filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="audio/wav")
+    else:
+        raise HTTPException(status_code=404, detail="Audio file not found")
 
 @app.post("/fix-audio", response_model=FixResponse)
 async def fix_audio(
