@@ -3,9 +3,9 @@ import os
 import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import uvicorn
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Ensure the parent directory is in the path to import controllerUtils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from controllerUtils import (
+from src.controllerUtils import (
     transcribe,
     detect_energy,
     get_words_in_loud_segments,
@@ -28,16 +28,25 @@ from controllerUtils import (
     ctx_anomaly_detector,
     word_predictor
 )
-from stitcher.models.stitcherModels import WordToken, wordtokens_to_json
+from src.stitcher.models.stitcherModels import WordToken, wordtokens_to_json
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Directory to save uploaded audio files
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "input", "uploaded_audio")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-@app.post("/feed-audio")
+@app.post("/feed-audio", response_model=dict[str, list[WordToken]])
 async def feed_audio(file: UploadFile = File(...)):
     """
     Endpoint to upload and save an original audio file. Also runs the previous main logic for future enhancement.
@@ -85,7 +94,7 @@ async def feed_audio(file: UploadFile = File(...)):
         predicted_text = word_predictor(blank_inserted_trans)
 
         wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
-        return JSONResponse(content={"wordtokens": wordtokens_to_json(wordtokens)})
+        return {"wordtokens": wordtokens}
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)

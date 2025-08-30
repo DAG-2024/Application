@@ -1,14 +1,17 @@
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { AudioPlayer } from "@/components/AudioPlayer";
+import { RotateCcw, Loader2 } from "lucide-react";
+import type { WordToken } from "@/types";
+import TokenRow from "@/components/ui/tokens-editor"; // <-- adjust path as needed
 
 const Index = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [notes, setNotes] = useState("");
+  const [transcriptionResults, setTranscriptionResults] = useState<WordToken[]>([]);
+  const [isGeneratingTranscription, setIsGeneratingTranscription] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -17,7 +20,9 @@ const Index = () => {
     };
   }, [audioUrl]);
 
-  const onChooseFile = () => fileInputRef.current?.click();
+  const onChooseFile = () => {
+    fileInputRef.current?.click();
+  };
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -28,10 +33,77 @@ const Index = () => {
     setAudioUrl(url);
   };
 
+  const onGenerateTranscription = async () => {
+    if (!audioFile) {
+      toast({
+        title: "No audio file",
+        description: "Please upload an audio file first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsGeneratingTranscription(true);
+    toast({
+      title: "Generating transcription",
+      description: "Transcription is being generated...",
+    });
+
+    try {
+      const formData = new FormData();
+      formData.append("file", audioFile);
+
+      const response = await fetch("http://127.0.0.1:8000/feed-audio", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Backend returns: { wordtokens: [...] }
+      const raw: WordToken[] = data.wordtokens || [];
+
+      // Ensure original_text exists; default it to the initial text
+      const normalized: WordToken[] = raw.map((t) => ({
+        ...t,
+        original_text: t.original_text ?? t.text,
+        isEdited: false,
+        predicted: t.to_synth,
+      }));
+
+      setTranscriptionResults(normalized);
+
+      toast({
+        title: "Transcription complete",
+        description: `Loaded ${normalized.length} tokens.`,
+      });
+    } catch (error) {
+      console.error("Error generating transcription:", error);
+      toast({
+        title: "Error",
+        description: "Failed to generate transcription. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingTranscription(false);
+    }
+  };
+
   const onSubmit = () => {
+    const finalText = transcriptionResults.map((t) => t.text).join(" ");
+    const changed = transcriptionResults.filter(
+      (t) => t.text !== (t.original_text ?? "")
+    ).length;
+
     toast({
       title: "Submitted",
-      description: "Your notes have been submitted.",
+      description: `Changed ${changed} token(s). Preview: ${finalText.slice(0, 120)}${
+        finalText.length > 120 ? "…" : ""
+      }`,
     });
   };
 
@@ -42,9 +114,24 @@ const Index = () => {
           <h1 className="text-3xl font-bold tracking-tight mb-6">
             DAG - Audio Restorer
           </h1>
-          <Button variant="white" onClick={onChooseFile} className="transition-smooth">
-            Upload audio file
-          </Button>
+          <div className="flex gap-3">
+            <Button variant="white" onClick={onChooseFile} className="transition-smooth">
+              Upload audio file
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onGenerateTranscription}
+              disabled={!audioFile || isGeneratingTranscription}
+              className="transition-smooth flex items-center gap-2"
+            >
+              {isGeneratingTranscription ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RotateCcw className="h-4 w-4" />
+              )}
+              {isGeneratingTranscription ? "Generating..." : "Generate transcription"}
+            </Button>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -57,15 +144,21 @@ const Index = () => {
       </header>
 
       <main className="container mx-auto max-w-3xl px-4 pb-16 space-y-6">
-        <section aria-labelledby="notes-heading">
-          <h2 id="notes-heading" className="sr-only">Notes editor</h2>
+        {/* --- Token editor (replaces the textarea) --- */}
+        <section aria-labelledby="tokens-heading">
+          <h2 id="tokens-heading" className="sr-only">Token editor</h2>
           <div className="rounded-lg border bg-card p-4 shadow-elegant">
-            <Textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Write your notes here..."
-              className="min-h-[180px] bg-card"
-            />
+            {transcriptionResults.length > 0 ? (
+              <TokenRow
+                tokens={transcriptionResults}
+                onChange={setTranscriptionResults}
+              />
+              
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Upload an audio file and generate a transcription that you can edit.
+              </p>
+            )}
           </div>
         </section>
 
