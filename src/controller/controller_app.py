@@ -33,6 +33,7 @@ from controllerUtils import (
 
     build_word_tokens_of_detection,
     predict_and_fill_tokens,
+    plot_speech_vs_noise_spectrogram,
 )
 
 from stitcher.models.stitcherModels import WordToken, wordtokens_to_json
@@ -65,25 +66,43 @@ async def feed_audio(file: UploadFile = File(...)):
     try:
 
 
-        whisper_result = transcribe(AUDIO_PATH)
-        whisper_transcription = segments_to_transcription(whisper_result)
-        indexed_transcription = indexed_transcription_str(whisper_transcription)
+        # whisper_result = transcribe(AUDIO_PATH)
+        # whisper_transcription = segments_to_transcription(whisper_result)
+        # indexed_transcription = indexed_transcription_str(whisper_transcription)
+        #
+        # anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
+        # anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
+        # anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
+        #
+        # tokens = build_word_tokens_of_detection(
+        #     wav_path=AUDIO_PATH,
+        #     whisper_json_or_path=whisper_result,
+        #     # context anomalies:
+        #     anomaly_word_idx=anomaly_idxs,
+        # )
+        #
+        # app_logger.debug(f"Wordtokens: {tokens}")
 
-        anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
-        anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
-        anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
-
-        tokens = build_word_tokens_of_detection(
+        plot_speech_vs_noise_spectrogram(
             wav_path=AUDIO_PATH,
-            whisper_json_or_path=whisper_result,
-            # context anomalies:
-            anomaly_word_idx=anomaly_idxs,
+            out_path=os.path.join(UPLOAD_DIR, f"spectrogram_spectrogram_overlay_{file.filename}.png"),
+            n_fft=1024,
+            hop_ms=10,
+            win_ms=25,
+            top_db=80.0,
+            vad_mode=3,
+            fmax=8000,
+            n_mels=128,
+            cmap="magma",
+            denoise=False,
+            preemph_coef=0.97,
+            noise_reduction_db=12.0,
+            mask_slope_db=6.0,
+            rms_target_dbfs=-23.0,
         )
-
-        app_logger.debug(f"Wordtokens: {tokens}")
-
         # Predict and fill [blank] words
         # tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
+        tokens = []
 
         return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
     except Exception as e:

@@ -1,7 +1,8 @@
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import numpy as np
 import librosa
 import webrtcvad
+from dataclasses import dataclass
 
 # =========================
 # Core utilities
@@ -98,66 +99,153 @@ def mask_to_segments(mask: np.ndarray, hop_s: float) -> List[Tuple[float, float]
     return out
 
 
-def detect_acoustic_events_in_speech(
-    y: np.ndarray,
-    sr: int,
-    hop_len: int,
-    rms_db_boost: float = 6.0,  # how much louder than the background a frame must be to count
-    flat_th: float = 0.35,   # higher -> only very noisy textures are marked
-    flux_z: float = 1.5,    # controls sensitivity to sudden changes
-    zcr_th: float = 0.2,  # controls detection of crackles / high-frequency artifacts
-) -> List[Tuple[float, float]]:
-    """
-    Detect artifact/noise events *within* speech regions by combining features.
-    """
+# =========================
+# Helpers
+# =========================
+
+def segments_to_mask(segments: List[Tuple[float, float]], length: int, hop_s: float) -> np.ndarray:
+    mask = np.zeros(length, dtype=bool)
+    for s, e in segments:
+        i0 = max(0, int(np.floor(s / hop_s)))
+        i1 = min(length, int(np.ceil(e / hop_s)))
+        if i1 > i0:
+            mask[i0:i1] = True
+    return mask
+
+def merge_and_filter_segments(segments: List[Tuple[float, float]], min_dur: float, min_gap: float) -> List[Tuple[float, float]]:
+    if not segments:
+        return []
+    segments = sorted(segments, key=lambda x: x[0])
+    merged: List[Tuple[float, float]] = []
+    cs, ce = segments[0]
+    for s, e in segments[1:]:
+        if s - ce <= min_gap:
+            ce = max(ce, e)
+        else:
+            if (ce - cs) >= min_dur:
+                merged.append((cs, ce))
+            cs, ce = s, e
+    if (ce - cs) >= min_dur:
+        merged.append((cs, ce))
+    return merged
+
+@dataclass
+class _FeatPack:
+    rms_db: np.ndarray
+    flat: np.ndarray
+    flux_z: np.ndarray
+    zcr: np.ndarray
+    noise_floor: float
+
+def _compute_features_and_masks(y: np.ndarray, sr: int, hop_ms: int, vad_mode: int) -> tuple[_FeatPack, np.ndarray, float]:
+    hop_len = int(sr * hop_ms / 1000)
     rms_db, flatness, flux, zcr = extract_acoustic_features(y, sr, frame_len=2048, hop_len=hop_len)
     L = min(len(rms_db), len(flatness), len(flux), len(zcr))
     rms_db, flatness, flux, zcr = rms_db[:L], flatness[:L], flux[:L], zcr[:L]
-
-    noise_floor = np.percentile(rms_db, 15)
-    loud = rms_db > (noise_floor + rms_db_boost)
-
-    flux_zscore = (flux - flux.mean()) / (flux.std() + 1e-8)
-
-    # A frame is a "defect candidate" if any abnormal feature triggers.
-    defect = (loud & (flatness > flat_th)) | (flux_zscore > flux_z) | (zcr > zcr_th)
-
     hop_s = hop_len / sr
-    acoustic_events = mask_to_segments(defect, hop_s)
-    return acoustic_events
+
+    # Adaptive noise floor from the lower percentile of RMS
+    noise_floor = np.percentile(rms_db, 15)
+
+    # Z-score flux per recording
+    flux_z = (flux - flux.mean()) / (flux.std() + 1e-8)
+
+    # Speech gating via WebRTC VAD aligned to feature frames
+    speech_mask_vad, vad_idx, vad_hop = webrtc_speech_mask(y, sr, mode=vad_mode, frame_ms=20, hop_ms=hop_ms)
+    vad_hop_s = vad_hop / sr
+    speech_segments = mask_to_segments(speech_mask_vad, vad_hop_s)
+    speech_mask_feat = segments_to_mask(speech_segments, L, hop_s)
+
+    feats = _FeatPack(rms_db=rms_db, flat=flatness, flux_z=flux_z, zcr=zcr, noise_floor=noise_floor)
+    return feats, speech_mask_feat, hop_s
+
+
+def _classify_segment(i0: int, i1: int, feats: _FeatPack, hop_s: float) -> tuple[str, float]:
+    dur_s = (i1 - i0) * hop_s
+    f_rms = feats.rms_db[i0:i1]
+    f_flat = feats.flat[i0:i1]
+    f_fluxz = feats.flux_z[i0:i1]
+    f_zcr = feats.zcr[i0:i1]
+
+    rms_boost = float(np.maximum(0.0, f_rms.mean() - feats.noise_floor))
+    flat_m = float(f_flat.mean())
+    flux_m = float(f_fluxz.mean())
+    zcr_m = float(f_zcr.mean())
+
+    # Simple heuristics
+    if dur_s < 0.08 and flux_m > 2.5:
+        label = 'click'
+    elif flat_m > 0.6 and zcr_m > 0.25 and dur_s >= 0.15:
+        label = 'hiss'
+    elif flat_m < 0.2 and zcr_m < 0.1 and dur_s >= 0.15:
+        label = 'hum'
+    else:
+        label = 'loud_noise'
+
+    # Severity score in [0, 1] via squashed weighted sum
+    raw = 0.6 * (rms_boost / 6.0) + 0.5 * flux_m + 0.4 * (flat_m - 0.35) + 0.2 * (zcr_m - 0.2)
+    score = 1.0 / (1.0 + np.exp(-raw))
+    score = float(np.clip(score, 0.0, 1.0))
+    return label, score
 
 # =========================
-# End-to-end function
+# Improved detector (new)
 # =========================
 
-def analyze_recording(
+def detect_noise_events(
     wav_path: str,
-    # acoustic thresholds
-    rms_db_boost: float = 6.0,  # how much louder than the background a frame must be to count as “loud.”
-    flat_th: float = 0.35,      # higher → only very noisy textures are marked.
-    flux_z: float = 1.5,        # controls sensitivity to sudden changes.
-    zcr_th: float = 0.2,        # controls detection of crackles / high-frequency artifacts.
-    hop_ms: int = 10,           # hop size in ms
-
-) -> List[Tuple[float, float]]:
+    hop_ms: int = 10,
+    vad_mode: int = 2,
+    rms_db_boost: float = 6.0,
+    flat_th: float = 0.35,
+    flux_z: float = 1.5,
+    zcr_th: float = 0.2,
+    min_event_dur: float = 0.05,
+    min_gap: float = 0.05,
+    speech_overlap_th: float = 0.3,  # fraction of frames overlapped with VAD speech to count as masking
+) -> List[Dict[str, float | str | bool]]:
     """
-    End-to-end analysis:
-      - Load audio
-      - Acoustic defects within speech
+    Detect loud/noisy events across the whole file, then tag whether each event overlaps speech.
+    Returns dicts with keys:
+      start, end, label='loud_noise', score, label_detail, masking_speech (bool), speech_overlap (0..1)
     """
-
-    # 1) Load audio mono @16k (required for WebRTC VAD)
+    # 16 kHz mono for VAD stability
     y, sr = librosa.load(wav_path, sr=16000, mono=True)
 
-    hop_len = int(sr * hop_ms / 1000)
+    # Features + speech mask aligned to feature frames
+    feats, speech_mask_feat, hop_s = _compute_features_and_masks(y, sr, hop_ms, vad_mode)
 
-    # 2) Acoustic defect events restricted to speech
-    events = detect_acoustic_events_in_speech(
-        y, sr, hop_len,
-        rms_db_boost=rms_db_boost,
-        flat_th=flat_th,
-        flux_z=flux_z,
-        zcr_th=zcr_th,
-    )
+    # Core defect mask (no VAD gating here so we also get non‑speech noises)
+    loud = feats.rms_db > (feats.noise_floor + rms_db_boost)
+    defect = (loud & (feats.flat > flat_th)) | (feats.flux_z > flux_z) | (feats.zcr > zcr_th)
+
+    # Segment smoothing
+    segs = mask_to_segments(defect, hop_s)
+    segs = merge_and_filter_segments(segs, min_event_dur, min_gap)
+
+    # Classify, score, and compute speech overlap tag
+    events: List[Dict[str, float | str | bool]] = []
+    for s, e in segs:
+        i0 = max(0, int(np.floor(s / hop_s)))
+        i1 = max(i0 + 1, int(np.ceil(e / hop_s)))
+
+        # Speech overlap ratio for this event
+        total = max(1, i1 - i0)
+        sp_frames = int(np.sum(speech_mask_feat[i0:i1]))
+        sp_overlap = float(sp_frames / total)
+        masking = bool(sp_overlap >= speech_overlap_th)
+
+        # Acoustic class and severity
+        label_detail, score = _classify_segment(i0, i1, feats, hop_s)
+
+        events.append({
+            'start': float(s),
+            'end': float(e),
+            'label': 'loud_noise',           # keep downstream compatibility
+            'label_detail': label_detail,    # click/hiss/hum/loud_noise
+            'score': float(score),
+            'masking_speech': masking,       # True => loud noise overlapping speech
+            'speech_overlap': sp_overlap,    # 0..1 fraction
+        })
 
     return events
