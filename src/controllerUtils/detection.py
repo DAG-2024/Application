@@ -25,7 +25,7 @@ from controllerUtils.plot import (
 log_dir = "log"
 os.makedirs(log_dir, exist_ok=True)
 detection_logger = logging.getLogger("detection")
-detection_logger.setLevel(logging.DEBUG)
+detection_logger.setLevel(logging.INFO)
 
 # Avoid adding multiple handlers if re-imported
 if not detection_logger.handlers:
@@ -106,6 +106,8 @@ def build_word_tokens_of_detection(
     # --- Gap handling params ---
     gap_min_dur: float = 0.12,          # ignore tiny gaps
     gap_energy_cov_th: float = 0.30,     # fraction of gap covered by energy to consider it noise
+    # --- Plotting params (if plotting is enabled) ---
+    plot_spectrogram: bool = True,
 ):
     try:
         # --- 1) Run the acoustic analysis (tags masking vs non-masking) ---
@@ -134,7 +136,6 @@ def build_word_tokens_of_detection(
         # --- 3) Prepare anomaly index sets ---
         word_anom: Set[int] = set(int(i) for i in (anomaly_word_idx or []))
         word_anom = {i for i in word_anom if 0 <= i < len(words)}
-
 
         # --- 4) Min word length in transcription ---
         min_word_len = words[0].end - words[0].start if words else 0.2
@@ -203,31 +204,23 @@ def build_word_tokens_of_detection(
 
         tokens.sort(key=lambda t: (t.start, t.end))
 
+        # --- 7) Plot spectrogram with overlays ---
 
+        if plot_spectrogram:
+            # prepare anomaly segments for plotting
+            anom_segs = [words[i] for i in word_anom if 0 <= i < len(words)]
+
+            plot_speech_spectrogram(
+                wav_path = wav_path,
+                out_path = "log/spectrogram.png",
+                energy_segments = energy_events,
+                anomaly_segments= anom_segs,
+                low_conf_segments= words,
+                conf_threshold = low_conf_th
+            )
 
     except Exception as e:
         detection_logger.error(f"Error in build_word_tokens_of_detection: {e}")
         tokens = []
 
     return tokens
-
-
-"""
-plot_speech_vs_noise_spectrogram(
-            wav_path=AUDIO_PATH,
-            out_path=os.path.join(UPLOAD_DIR, f"spectrogram_spectrogram_overlay_{file.filename}.png"),
-            n_fft=1024,
-            hop_ms=10,
-            win_ms=25,
-            top_db=80.0,
-            fmax=8000,
-            n_mels=128,
-            cmap="magma",
-            denoise=False,
-            preemph_coef=0.97,
-            noise_reduction_db=12.0,
-            mask_slope_db=6.0,
-            rms_target_dbfs=-23.0,
-        )
-        
-"""

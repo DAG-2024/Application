@@ -59,34 +59,37 @@ async def feed_audio(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
     AUDIO_PATH = file_path
-    CONF_THRESH = 0.3
-    USE_LOW_CONF_INTERSECTION = True
-    USE_NOISE_MASKING = True
     
     try:
         whisper_result = transcribe(AUDIO_PATH)
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
-        app_logger.debug(f"indexed_transcription: {indexed_transcription}")
-
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
 
-        app_logger.debug(f"anomaly_idxs: {anomaly_idxs}")
-
         tokens = build_word_tokens_of_detection(
             wav_path=AUDIO_PATH,
+            anomaly_word_idx=anomaly_idxs,
             whisper_json_or_path=whisper_result,
-            anomaly_word_idx=anomaly_idxs
+            low_conf_th = 0.58,         # confidence threshold for low-confidence words
+
+            w_conf_w = 0.50,            # weight for confidence term (low confidence => more likely to synth)
+            energy_w = 0.40,            # weight for energy overlap term
+            anomaly_w = 0.60,           # weight for anomaly term
+            synth_score_th = 0.60,      # threshold to decide synthesis
+
+            gap_min_dur = 0.12,         # ignore tiny gaps
+            gap_energy_cov_th = 0.30,   # fraction of gap covered by energy to consider it noise
+
+            plot_spectrogram = True     # plot spectrogram for logging/debugging
         )
 
-        #app_logger.debug(f"tokens: {tokens}")
 
 
         # Predict and fill [blank] words
-        # tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
+        tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
 
         return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
     except Exception as e:
