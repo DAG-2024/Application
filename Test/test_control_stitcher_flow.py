@@ -10,7 +10,7 @@ STITCHER_PORT = 9001
 # --- CONFIG ---
 FEED_AUDIO_URL = f"http://{CONTROLLER_URL}:{CONTROLLER_PORT}/feed-audio"
 FIX_AUDIO_URL =  f"http://{STITCHER_URL}:{STITCHER_PORT}/fix-audio"
-AUDIO_FILE_PATH = "sample_audio.wav"
+AUDIO_FILE_PATH = "audio1.wav"
 OUTPUT_WAV_PATH = "fixed_output.wav"
 
 try:

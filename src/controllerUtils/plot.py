@@ -66,57 +66,7 @@ def _soft_spectral_gate_denoise(
     y_clean = librosa.istft(D_clean, hop_length=hop_length, win_length=win_length, length=len(y))
     return y_clean.astype(np.float32)
 
-def _preprocess_for_plot(
-    y: np.ndarray,
-    sr: int,
-    n_fft: int,
-    hop_length: int,
-    win_length: int,
-    vad_mode: int,
-    hop_ms: int,
-    preemph_coef: float = 0.97,
-    noise_reduction_db: float = 12.0,
-    mask_slope_db: float = 6.0,
-    rms_target_dbfs: float = -23.0,
-) -> np.ndarray:
-    """
-    DC removal -> pre-emphasis (high-pass) -> soft spectral gating -> RMS normalize.
-    """
-    if len(y) == 0:
-        return y
-
-    # DC removal
-    y = y - float(np.mean(y))
-
-    # Pre-emphasis (simple high-pass)
-    # y[n] = y[n] - a * y[n-1]
-    y = np.append(y[0], y[1:] - preemph_coef * y[:-1])
-
-    # Spectral denoise
-    y = _soft_spectral_gate_denoise(
-        y=y,
-        sr=sr,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        win_length=win_length,
-        vad_mode=vad_mode,
-        hop_ms=hop_ms,
-        noise_reduction_db=noise_reduction_db,
-        mask_slope_db=mask_slope_db,
-    )
-
-    # RMS normalization to target dBFS
-    eps = 1e-9
-    rms = float(np.sqrt(np.mean(np.square(y)) + eps))
-    target_amp = 10.0 ** (rms_target_dbfs / 20.0)
-    if rms > 0:
-        gain = min(1.0, target_amp / rms)
-        y = np.clip(y * gain, -1.0, 1.0)
-
-    return y.astype(np.float32)
-
-
-def plot_speech_vs_noise_spectrogram(
+def plot_speech_spectrogram(
     wav_path: str,
     out_path: str = "spectrogram_overlay.png",
     # Time/frequency resolution:
@@ -146,20 +96,6 @@ def plot_speech_vs_noise_spectrogram(
     # 2) Optional cleanup before graphing
     hop_length = int(sr * hop_ms / 1000)
     win_length = int(sr * win_ms / 1000)
-    if denoise:
-        y = _preprocess_for_plot(
-            y=y,
-            sr=sr,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
-            vad_mode=vad_mode,
-            hop_ms=hop_ms,
-            preemph_coef=preemph_coef,
-            noise_reduction_db=noise_reduction_db,
-            mask_slope_db=mask_slope_db,
-            rms_target_dbfs=rms_target_dbfs,
-        )
 
     # 3) Compute log-mel spectrogram from cleaned audio
     S = librosa.feature.melspectrogram(
@@ -213,8 +149,8 @@ def plot_speech_vs_noise_spectrogram(
                     facecolor=(0.1, 0.9, 0.2, 0.25),
                 )
             )
-        lbl = f"{ev.get('label_detail', 'noise')}:{ev.get('score', 0):.2f}"
-        ax.text(s, y1, lbl, va="bottom", ha="left", fontsize=8, color=(0.1, 0.6, 0.9, 1.0))
+            lbl = f"{ev.get('label', 'noise')}:[{ev.get('start_time', 0):.2f}-{ev.get('end_time', 0):.2f}]"
+            ax.text(s, y1, lbl, va="bottom", ha="left", fontsize=8, color=(0.1, 0.6, 0.9, 1.0))
 
     ax.set_xlim(0, t_axis[-1] if len(t_axis) else (len(y) / sr))
     plt.tight_layout()
