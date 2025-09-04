@@ -73,7 +73,7 @@ async def feed_audio(file: UploadFile = File(...)):
             wav_path=AUDIO_PATH,
             anomaly_word_idx=anomaly_idxs,
             whisper_json_or_path=whisper_result,
-            low_conf_th = 0.58,         # confidence threshold for low-confidence words
+            low_conf_th = 0.3,         # confidence threshold for low-confidence words
 
             w_conf_w = 0.50,            # weight for confidence term (low confidence => more likely to synth)
             energy_w = 0.40,            # weight for energy overlap term

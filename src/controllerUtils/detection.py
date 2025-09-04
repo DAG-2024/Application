@@ -6,7 +6,6 @@ from pathlib import Path
 import logging
 import os
 
-
 # Make `src/` importable for the project layout
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"

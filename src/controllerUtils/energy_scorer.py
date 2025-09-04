@@ -1,10 +1,16 @@
 import numpy as np
 import librosa
 
-def calculate_adaptive_thresholds(y, sr, frame_length=2048, hop_length=1024,
-                                weak_percentile=10, noise_percentile=91,
-                                min_weak_thresh_db=-50.0, max_noise_thresh_db=-10.0,
-                                min_separation=20.0):
+def calculate_adaptive_thresholds(
+        y, sr,
+        frame_length=2048,
+        hop_length=1024,
+        weak_percentile=10,
+        noise_percentile=91,
+        min_weak_thresh_db=-50.0,
+        max_noise_thresh_db=-10.0,
+        min_separation=20.0
+):
     """
     Calculate adaptive thresholds based on the audio's energy distribution.
 
@@ -21,7 +27,6 @@ def calculate_adaptive_thresholds(y, sr, frame_length=2048, hop_length=1024,
     Returns:
         weak_thresh_db, noise_thresh_db: adaptive threshold values
     """
-
     rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
     rms_db = librosa.amplitude_to_db(rms, ref=1.0)
     rms_db = rms_db[np.isfinite(rms_db)]  # filter out -inf
@@ -112,7 +117,7 @@ def detect_energy_segments(
     segments = []
     curr = None  # current run: start, end, label, energies
 
-    def flush_and_maybe_merge(run):
+    def flush_and_merge(run):
         """Flush current run if long enough; merge into previous segment if same label and tiny gap."""
         if run is None:
             return
@@ -146,7 +151,7 @@ def detect_energy_segments(
         lab = label_db(db)
         if curr is None or lab != curr["label"]:
             # label change -> flush previous (with merge logic)
-            flush_and_maybe_merge(curr)
+            flush_and_merge(curr)
             # start new run
             curr = {
                 "start": t,
@@ -159,7 +164,7 @@ def detect_energy_segments(
             curr["energies"].append(db)
 
     # flush last run
-    flush_and_maybe_merge(curr)
+    flush_and_merge(curr)
 
     # finalize: compute mean_db + score and round times
     finalized = []
