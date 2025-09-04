@@ -139,8 +139,6 @@ def _word_bleed(wordTokens: List[WordToken], index: int):
     continue_left = True
     continue_right = True
 
-    stitcher_logger.debug(f"TEST123 {wordTokens[index].text}")
-
     for i in range(1, 3):
 
         continue_left = (continue_left
