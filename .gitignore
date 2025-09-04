@@ -67,3 +67,4 @@ output/
 *.temp
 /src/AZURE_OPENAI.env
 /Frontend-Lovable/node_modules/
+/Test/wordtokens.json
