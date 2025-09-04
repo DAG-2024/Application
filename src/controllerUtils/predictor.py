@@ -1,14 +1,30 @@
 from openai import AzureOpenAI
 from dotenv import load_dotenv
 import os
+import sys
+import logging
 from pathlib import Path
+
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+app_logger = logging.getLogger("controller_app")
+app_logger.setLevel(logging.DEBUG)
+
+if not app_logger.handlers:
+    file_handler = logging.FileHandler(os.path.join(log_dir, "app.log"))
+    stream_handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    app_logger.addHandler(file_handler)
+    app_logger.addHandler(stream_handler)
 
 def word_predictor(transcription: str):
     # Calculate the absolute path to the root .env file
     current_file = Path(__file__)
     root_dir = current_file.parent.parent.parent  # Go up from src/controllerUtils/ to root
     env_path = root_dir / ".env"
-    
+
     load_dotenv(dotenv_path=str(env_path))
 
     client = AzureOpenAI(

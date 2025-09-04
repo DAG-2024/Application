@@ -13,7 +13,7 @@ from .transcriber import transcribe
 from .energy_scorer import detect_energy
 from .noisy_words_detector import get_words_in_loud_segments, word_overlap_with_noise
 from .context_anomaly_detection import ctx_anomaly_detector
-from .predictor import word_predictor, predict_and_fill_tokens
+from .predictor import word_predictor, predict_and_fill_tokens, tokens_to_template
 from .plot import plot_speech_spectrogram
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     'word_overlap_with_noise',
     'ctx_anomaly_detector',
     'word_predictor',
+    'tokens_to_template',
 
     'build_word_tokens_of_detection',
 

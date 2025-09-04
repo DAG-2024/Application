@@ -31,6 +31,7 @@ from src.controllerUtils import (
     word_overlap_with_noise,
     ctx_anomaly_detector,
     word_predictor,
+    tokens_to_template,
 
     build_word_tokens_of_detection,
     predict_and_fill_tokens,
@@ -100,10 +101,13 @@ async def feed_audio(file: UploadFile = File(...)):
 
         # Predict and fill [blank] words
         tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
+        template, _ = tokens_to_template(tokens)
+        predicted = word_predictor(template)
+        wordtokens = align_blanks_and_predicted(template, predicted)
 
         # return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
-        #wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
-        return {"wordtokens":tokens}
+        # #wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
+        return {"wordtokens": wordtokens}
     
     except Exception as e:
         app_logger.error(f"Error: {str(e)}")
