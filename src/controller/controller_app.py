@@ -296,7 +296,7 @@ def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
                 wordtokens.append(WordToken(
                     start=w.start,
                     end=w.end,
-                    text=w.text,
+                    text=pred_words[pred_idx],
                     to_synth=False,
                     is_speech=True,
                     synth_path=None
