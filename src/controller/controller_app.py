@@ -3,6 +3,7 @@ import os
 import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import uvicorn
 
@@ -23,7 +24,7 @@ if not app_logger.handlers:
 # Ensure the parent directory is in the path to import controllerUtils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from controllerUtils import (
+from src.controllerUtils import (
     transcribe,
     detect_energy,
     get_words_in_loud_segments,
@@ -36,16 +37,25 @@ from controllerUtils import (
     plot_speech_spectrogram,
 )
 
-from stitcher.models.stitcherModels import WordToken, wordtokens_to_json
+from src.stitcher.models.stitcherModels import WordToken, wordtokens_to_json
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Directory to save uploaded audio files
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "input", "uploaded_audio")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-@app.post("/feed-audio")
+@app.post("/feed-audio", response_model=dict[str, list[WordToken]])
 async def feed_audio(file: UploadFile = File(...)):
     """
     Endpoint to upload and save an original audio file. Also runs the previous main logic for future enhancement.
@@ -92,6 +102,9 @@ async def feed_audio(file: UploadFile = File(...)):
         tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
 
         return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
+        #wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
+        #return {"wordtokens": wordtokens}
+    
     except Exception as e:
         app_logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)

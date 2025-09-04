@@ -1,6 +1,8 @@
 import logging
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form, Query
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from .models.stitcherModels import WordToken, FixResponse
 from typing import List
 import uuid, os, requests
@@ -8,6 +10,10 @@ import ffmpeg
 import logging
 import re
 from tempfile import gettempdir
+from fastapi.middleware.cors import CORSMiddleware
+from pydub import AudioSegment
+import pyloudnorm as pyln
+
 
 # Configure logging
 logging.basicConfig(
@@ -21,6 +27,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files directory for serving generated audio files
+app.mount("/static", StaticFiles(directory=gettempdir()), name="static")
 
 
 async def save_upload_file(upload: UploadFile) -> str:
@@ -216,10 +233,20 @@ async def health_check():
         "message": "Stitcher service is running"
     }
 
+@app.get("/audio/{filename}")
+async def get_audio_file(filename: str):
+    """Serve generated audio files"""
+    file_path = os.path.join(gettempdir(), filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="audio/wav")
+    else:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
 @app.post("/fix-audio", response_model=FixResponse)
 async def fix_audio(
     file: UploadFile = File(...),
     payload: str = Form(...)
+    balance: bool = Query(False, description="Apply EQ and voice balancing to output audio")
 ):
     try:
         # Parse JSON string to list of WordToken objects
@@ -231,7 +258,20 @@ async def fix_audio(
         vp_path, transcription = make_voice_print(orig_path, word_tokens)
         synth_segments(vp_path, word_tokens, transcription)
         result = stitch_all(orig_path, word_tokens)
-        return FixResponse(fixed_url=f"file://{result}")
+         # Optionally apply EQ and voice balancing
+        if balance:
+            audio = AudioSegment.from_file(result)
+            samples = audio.get_array_of_samples()
+            meter = pyln.Meter(audio.frame_rate)
+            loudness = meter.integrated_loudness(samples)
+            target_loudness = -23.0  # LUFS, standard broadcast
+            loudness_diff = target_loudness - loudness
+            balanced_audio = audio.apply_gain(loudness_diff)
+            balanced_path = os.path.join(gettempdir(), f"balanced_{os.path.basename(result)}")
+            balanced_audio.export(balanced_path, format="wav")
+            return FixResponse(fixed_url=f"file://{balanced_path}")
+        else:
+            return FixResponse(fixed_url=f"file://{result}")
 
     except ValueError as e:
         logger.error(f"Error: {e}")
