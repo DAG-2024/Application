@@ -26,6 +26,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+node_modules/
 
 # Virtual environments
 venv/
@@ -53,6 +54,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+log/
 
 # Output files
 output/
@@ -63,4 +65,6 @@ output/
 # Temporary files
 *.tmp
 *.temp
-/AZURE_OPENAI.env
+/src/AZURE_OPENAI.env
+/Frontend-Lovable/node_modules/
+/Test/wordtokens.json

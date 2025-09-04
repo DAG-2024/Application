@@ -2,10 +2,8 @@ from openai import AzureOpenAI
 from dotenv import load_dotenv
 import os
 
-
-
 def ctx_anomaly_detector(transcription: str, indexed_transcription: str):
-    load_dotenv(dotenv_path="../../.env")
+    load_dotenv(dotenv_path="src/AZURE_OPENAI.env")
 
     client = AzureOpenAI(
         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
