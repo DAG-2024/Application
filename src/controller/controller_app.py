@@ -5,10 +5,13 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
+from typing import List
+import re
 import uvicorn
 
 log_dir = "log"
 os.makedirs(log_dir, exist_ok=True)
+
 app_logger = logging.getLogger("controller_app")
 app_logger.setLevel(logging.DEBUG)
 
@@ -31,10 +34,7 @@ from src.controllerUtils import (
     word_overlap_with_noise,
     ctx_anomaly_detector,
     word_predictor,
-    tokens_to_template,
-
     build_word_tokens_of_detection,
-    predict_and_fill_tokens,
     plot_speech_spectrogram,
 )
 
@@ -97,16 +97,11 @@ async def feed_audio(file: UploadFile = File(...)):
             plot_spectrogram = True     # plot spectrogram for logging/debugging
         )
 
-
-
-        # Predict and fill [blank] words
-        tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
-        template, _ = tokens_to_template(tokens)
+        template = " ".join([t.text for t in tokens])
         predicted = word_predictor(template)
-        wordtokens = align_blanks_and_predicted(template, predicted)
+        wordtokens = align_blanks_and_predicted(tokens, predicted)
 
-        # return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
-        # #wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
+
         return {"wordtokens": wordtokens}
     
     except Exception as e:
@@ -205,7 +200,7 @@ def adjust_by_noise_segments(all_words, loud_noise_segments):
     Modifies all_words in-place.
     """
     # Sort all_words by start time to enable ordered insertion
-    all_words.sort(key=lambda w: float(w['start']))
+    all_words.sort(key=lambda w: float(w.start))
 
     for noise in loud_noise_segments:
         if noise['label'] == 'loud_noise':
@@ -236,7 +231,7 @@ def adjust_by_noise_segments(all_words, loud_noise_segments):
                     all_words.append(new_word)
 
     # Ensure all_words remains sorted
-    all_words.sort(key=lambda w: float(w['start']))
+    all_words.sort(key=lambda w: float(w.start))
     return all_words
 
 
@@ -266,21 +261,20 @@ def insert_blank_and_modify_timestamp(whisper_res, indexes):
         # Optional: skip edge cases (first or last word) silently
     return all_words
 
-def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
-    orig_words = [w['word'] for w in words_after_noise_mask]
+def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
     pred_words = predicted_text.strip().split()
 
     wordtokens = []
     orig_idx = 0
     pred_idx = 0
-    while orig_idx < len(words_after_noise_mask):
-        w = words_after_noise_mask[orig_idx]
-        if w['word'] == '[blank]':
+    while orig_idx < len(pre_tokens):
+        w = pre_tokens[orig_idx]
+        if w.text == '[blank]':
             # Find the next non-blank word in the original
             next_non_blank = None
-            for j in range(orig_idx + 1, len(orig_words)):
-                if orig_words[j] != '[blank]':
-                    next_non_blank = orig_words[j]
+            for j in range(orig_idx + 1, len(pre_tokens)):
+                if pre_tokens[j].text != '[blank]':
+                    next_non_blank = pre_tokens[j].text
                     break
             phrase = []
             while pred_idx < len(pred_words) and (next_non_blank is None or pred_words[pred_idx] != next_non_blank):
@@ -288,8 +282,8 @@ def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
                 pred_idx += 1
             for word in phrase:
                 wordtokens.append(WordToken(
-                    start=w['start'],
-                    end=w['end'],
+                    start=w.start,
+                    end=w.end,
                     text=word,
                     to_synth=True,
                     is_speech=True,
@@ -298,11 +292,11 @@ def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
             orig_idx += 1
         else:
             # If the predicted word matches, consume it
-            if pred_idx < len(pred_words) and pred_words[pred_idx] == w['word']:
+            if pred_idx < len(pred_words) and re.sub(r'[\.!\?,;:]+$', '', pred_words[pred_idx]) == re.sub(r'[\.!\?,;:]+$', '', w.text):
                 wordtokens.append(WordToken(
-                    start=w['start'],
-                    end=w['end'],
-                    text=w['word'],
+                    start=w.start,
+                    end=w.end,
+                    text=w.text,
                     to_synth=False,
                     is_speech=True,
                     synth_path=None
@@ -311,12 +305,13 @@ def align_blanks_and_predicted(words_after_noise_mask, predicted_text):
             else:
                 # If not matching, just add the original word
                 wordtokens.append(WordToken(
-                    start=w['start'],
-                    end=w['end'],
-                    text=w['word'],
+                    start=w.start,
+                    end=w.end,
+                    text=w.text,
                     to_synth=False,
                     is_speech=True,
                     synth_path=None
                 ))
             orig_idx += 1
+
     return wordtokens
