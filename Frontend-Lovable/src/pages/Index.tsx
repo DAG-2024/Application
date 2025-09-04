@@ -55,7 +55,7 @@ const Index = () => {
       const formData = new FormData();
       formData.append("file", audioFile);
 
-      const response = await fetch("http://127.0.0.1:8000/feed-audio", {
+      const response = await fetch("http://127.0.0.1:9002/feed-audio", {
         method: "POST",
         body: formData,
       });

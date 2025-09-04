@@ -1,9 +1,15 @@
 from openai import AzureOpenAI
 from dotenv import load_dotenv
 import os
+from pathlib import Path
 
 def word_predictor(transcription: str):
-    load_dotenv(dotenv_path="src/AZURE_OPENAI.env")
+    # Calculate the absolute path to the root .env file
+    current_file = Path(__file__)
+    root_dir = current_file.parent.parent.parent  # Go up from src/controllerUtils/ to root
+    env_path = root_dir / ".env"
+    
+    load_dotenv(dotenv_path=str(env_path))
 
     client = AzureOpenAI(
         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
