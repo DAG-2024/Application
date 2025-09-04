@@ -54,6 +54,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+log/
 
 # Output files
 output/
@@ -65,3 +66,4 @@ output/
 *.tmp
 *.temp
 /src/AZURE_OPENAI.env
+/Frontend-Lovable/node_modules/

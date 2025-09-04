@@ -15,17 +15,19 @@ from pydub import AudioSegment
 import pyloudnorm as pyln
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers = [
-        logging.FileHandler("log/stitcher.log"),  # Logs will be written to 'app.log'
-        logging.StreamHandler()  # Logs will still be printed to the console
-    ]
-)
-logger = logging.getLogger(__name__)
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+stitcher_logger = logging.getLogger("stitcher")
+stitcher_logger.setLevel(logging.DEBUG)
 
+if not stitcher_logger.handlers:
+    file_handler = logging.FileHandler(os.path.join(log_dir, "stitcher.log"))
+    stream_handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    stitcher_logger.addHandler(file_handler)
+    stitcher_logger.addHandler(stream_handler)
 app = FastAPI()
 
 app.add_middleware(
@@ -135,7 +137,9 @@ def _word_bleed(wordTokens: List[WordToken], index: int):
     """
 
     continue_left = True
-    continue_right = wordTokens[index].text[-1] not in ".!?,;:"
+    continue_right = True
+
+    stitcher_logger.debug(f"TEST123 {wordTokens[index].text}")
 
     for i in range(1, 3):
 
@@ -161,6 +165,8 @@ def _word_bleed(wordTokens: List[WordToken], index: int):
 
 def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
+
+    stitcher_logger.debug(f"TEST123")
 
     for i, s in enumerate(wordTokens):
         if s.to_synth and s.is_speech:
@@ -245,7 +251,7 @@ async def get_audio_file(filename: str):
 @app.post("/fix-audio", response_model=FixResponse)
 async def fix_audio(
     file: UploadFile = File(...),
-    payload: str = Form(...)
+    payload: str = Form(...),
     balance: bool = Query(False, description="Apply EQ and voice balancing to output audio")
 ):
     try:
