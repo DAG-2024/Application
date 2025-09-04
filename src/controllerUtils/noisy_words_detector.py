@@ -10,6 +10,7 @@ def word_overlap_with_noise(word, noise_segments, threshold=0.8):
         n_start = float(noise['start_time'])
         n_end = float(noise['end_time'])
 
+
         # Calculate overlap
         overlap_start = max(w_start, n_start)
         overlap_end = min(w_end, n_end)

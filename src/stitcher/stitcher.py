@@ -17,10 +17,10 @@ import pyloudnorm as pyln
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers = [
-        logging.FileHandler("stitcher.log"),  # Logs will be written to 'app.log'
+        logging.FileHandler("log/stitcher.log"),  # Logs will be written to 'app.log'
         logging.StreamHandler()  # Logs will still be printed to the console
     ]
 )
@@ -127,13 +127,16 @@ def make_voice_print(orig_path: str, wordTokens: List[WordToken]) -> (str, str):
     return out, transcription # local path and transcription text
 
 
-def synth_segments_word_bleed(wordTokens: List[WordToken], index: int):
+def _word_bleed(wordTokens: List[WordToken], index: int):
     """
     Adjust word tokens to synthesize whole sentences without overlap.
     If a word is marked for synthesis, its neighbors are adjusted to avoid overlap.
     Bleed range is 3 word on either side or until a punctuation mark is found.
     """
-    continue_left, continue_right = True, True
+
+    continue_left = True
+    continue_right = wordTokens[index].text[-1] not in ".!?,;:"
+
     for i in range(1, 3):
 
         continue_left = (continue_left
@@ -162,7 +165,7 @@ def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str
     for i, s in enumerate(wordTokens):
         if s.to_synth and s.is_speech:
             # Adjust neighbors to avoid overlap
-            synth_segments_word_bleed(wordTokens, i)
+            _word_bleed(wordTokens, i)
             with open(vp_path, "rb") as vp:
                 files = {
                     "audio_file": ("vp.wav", vp, "audio/wav")

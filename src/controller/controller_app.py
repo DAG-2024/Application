@@ -6,16 +6,20 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import uvicorn
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers = [
-        logging.FileHandler("app.log"),  # Logs will be written to 'app.log'
-        logging.StreamHandler()  # Logs will still be printed to the console
-    ]
-)
-logger = logging.getLogger(__name__)
+
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+app_logger = logging.getLogger("controller_app")
+app_logger.setLevel(logging.DEBUG)
+
+if not app_logger.handlers:
+    file_handler = logging.FileHandler(os.path.join(log_dir, "app.log"))
+    stream_handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    app_logger.addHandler(file_handler)
+    app_logger.addHandler(stream_handler)
 
 # Ensure the parent directory is in the path to import controllerUtils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,8 +30,13 @@ from src.controllerUtils import (
     get_words_in_loud_segments,
     word_overlap_with_noise,
     ctx_anomaly_detector,
-    word_predictor
+    word_predictor,
+
+    build_word_tokens_of_detection,
+    predict_and_fill_tokens,
+    plot_speech_spectrogram,
 )
+
 from src.stitcher.models.stitcherModels import WordToken, wordtokens_to_json
 
 app = FastAPI()
@@ -60,43 +69,44 @@ async def feed_audio(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
     AUDIO_PATH = file_path
-    CONF_THRESH = 0.3
-    USE_LOW_CONF_INTERSECTION = True
-    USE_NOISE_MASKING = True
     
     try:
         whisper_result = transcribe(AUDIO_PATH)
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
-
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
-
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
-        if USE_LOW_CONF_INTERSECTION:
-            anomaly_idxs_intersect = intersect_with_low_confidence_score(whisper_result, anomaly_idxs, thresh=CONF_THRESH)
-        else:
-            anomaly_idxs_intersect = anomaly_idxs
+
+        tokens = build_word_tokens_of_detection(
+            wav_path=AUDIO_PATH,
+            anomaly_word_idx=anomaly_idxs,
+            whisper_json_or_path=whisper_result,
+            low_conf_th = 0.3,         # confidence threshold for low-confidence words
+
+            w_conf_w = 0.50,            # weight for confidence term (low confidence => more likely to synth)
+            energy_w = 0.40,            # weight for energy overlap term
+            anomaly_w = 0.60,           # weight for anomaly term
+            synth_score_th = 0.60,      # threshold to decide synthesis
+
+            gap_min_dur = 0.12,         # ignore tiny gaps
+            gap_energy_cov_th = 0.30,   # fraction of gap covered by energy to consider it noise
+
+            plot_spectrogram = True     # plot spectrogram for logging/debugging
+        )
 
 
-        words_after_anomaly_mask = insert_blank_and_modify_timestamp(whisper_result, anomaly_idxs_intersect)
 
-        if USE_NOISE_MASKING:
-            energy_segments = detect_energy(AUDIO_PATH)
-            words_after_noise_mask = adjust_by_noise_segments(words_after_anomaly_mask, energy_segments)
-        else:
-            energy_segments = []
-            words_after_noise_mask = words_after_anomaly_mask
+        # Predict and fill [blank] words
+        tokens = predict_and_fill_tokens(tokens, predictor=word_predictor, split_multiword=False)
 
-
-        blank_inserted_trans = ' '.join(w['word'] for w in words_after_noise_mask)
-        predicted_text = word_predictor(blank_inserted_trans)
-
-        wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
-        return {"wordtokens": wordtokens}
+        return JSONResponse(content={"wordtokens": wordtokens_to_json(tokens)})
+        #wordtokens = align_blanks_and_predicted(words_after_noise_mask, predicted_text)
+        #return {"wordtokens": wordtokens}
+    
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        app_logger.error(f"Error: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
@@ -137,7 +147,7 @@ def print_low_confidence_words(whisper_res, thresh):
         for word_info in segment.get("words", []):
             if word_info.get("score", 1.0) < thresh:
                 print(f"'{word_info['word']}'  --  score: '{word_info['score']:.2f}'")
-                
+
 def print_loud_noise_segments(segments):
     print("Loud noise detection: \n")
     for segment in segments:
@@ -187,7 +197,7 @@ def adjust_by_noise_segments(all_words, loud_noise_segments):
     Given a flat list of words (all_words) and a list of loud noise intervals,
     replaces words that overlap with '[blank]'. If no words overlap a noise interval,
     inserts a new '[blank]' word in the appropriate position in all_words.
-    
+
     Modifies all_words in-place.
     """
     # Sort all_words by start time to enable ordered insertion
