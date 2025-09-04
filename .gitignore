@@ -26,6 +26,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+node_modules/
 
 # Virtual environments
 venv/
@@ -63,4 +64,4 @@ output/
 # Temporary files
 *.tmp
 *.temp
-/AZURE_OPENAI.env
+/src/AZURE_OPENAI.env
