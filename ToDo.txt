@@ -13,6 +13,6 @@ TODO: Backend:
 
 
 TODO: UTILS:
-    [] 1.IMPLEMENT ADDITIONAL USE CASES!!!
-    [] 2. Create a graph/ slide / flowchart explaining the flow
-    [] 3. Prepare for presentation in terms of: Technical flow of things
+    [x] 1.IMPLEMENT ADDITIONAL USE CASES!!!
+    [ ] 2. Create a graph/ slide / flowchart explaining the flow
+    [ ] 3. Prepare for presentation in terms of: Technical flow of things
