@@ -1,5 +1,5 @@
-from pydantic import BaseModel, TypeAdapter
-from typing import List, Optional
+from pydantic import BaseModel, TypeAdapter, Field
+from typing import List, Optional, Literal
 from pathlib import Path
 import json
 
@@ -10,6 +10,8 @@ class WordToken(BaseModel):
     to_synth: bool
     is_speech: bool
     synth_path: Optional[str] = None  # filled in after TTS
+
+
 
 def wordtokens_to_json(wordtokens: List[WordToken]) -> str:
     """
