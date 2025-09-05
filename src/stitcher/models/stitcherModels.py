@@ -11,7 +11,25 @@ class WordToken(BaseModel):
     is_speech: bool
     synth_path: Optional[str] = None  # filled in after TTS
 
-
+class Segment(BaseModel):
+    """
+    A merged, human-friendly indicator line for the UI on the *stitched* timeline.
+    - start/end: final stitched times
+    - source:    "orig" (from original) or "synth" (from TTS)
+    - tokens:    indices of WordToken objects included in this segment
+    - text:      joined text (post-bleed)
+    - src_start/src_end: (for orig) where it came from in the original file
+    - overlap_in/out: crossfade overlap into/out of this segment (seconds)
+    """
+    start: float
+    end: float
+    source: Literal["orig", "synth"]
+    tokens: List[int]
+    text: str
+    src_start: Optional[float] = None
+    src_end: Optional[float] = None
+    overlap_in: float = 0.0
+    overlap_out: float = 0.0
 
 def wordtokens_to_json(wordtokens: List[WordToken]) -> str:
     """
@@ -57,5 +75,11 @@ def load_wordtokens_json(file_path: str) -> List[WordToken]:
 
 
 class FixResponse(BaseModel):
+    """
+        Response payload for /fix-audio.
+          fixed_url: HTTP-served URL of the final stitched WAV.
+          segments:  UI timeline describing orig vs synth stretches.
+        """
     fixed_url: str
+    segments: List[Segment]
 

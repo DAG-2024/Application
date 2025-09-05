@@ -3,7 +3,8 @@ import logging
 from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from .models.stitcherModels import WordToken, FixResponse
+from .models.stitcherModels import WordToken, FixResponse, Segment
+from .segment import build_segments_for_ui, DEFAULT_CROSSFADE
 from typing import List
 import uuid, os, requests
 import ffmpeg
@@ -221,7 +222,7 @@ def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
     for nxt in clips[1:]:
         cur = ffmpeg.filter(
             [cur, nxt], "acrossfade",
-            d=0.02,    # duration = 20ms
+            d=DEFAULT_CROSSFADE,    # duration = 20ms
             c1="tri",  # fade curve
             c2="tri"
         )
@@ -264,6 +265,7 @@ async def fix_audio(
         vp_path, transcription = make_voice_print(orig_path, word_tokens)
         synth_segments(vp_path, word_tokens, transcription)
         result = stitch_all(orig_path, word_tokens)
+        segments = build_segments_for_ui(word_tokens, crossfade=DEFAULT_CROSSFADE)
          # Optionally apply EQ and voice balancing
         if balance:
             audio = AudioSegment.from_file(result)
@@ -275,9 +277,15 @@ async def fix_audio(
             balanced_audio = audio.apply_gain(loudness_diff)
             balanced_path = os.path.join(gettempdir(), f"balanced_{os.path.basename(result)}")
             balanced_audio.export(balanced_path, format="wav")
-            return FixResponse(fixed_url=f"file://{balanced_path}")
+            return FixResponse(
+                fixed_url=f"/static/{os.path.basename(balanced_path)}",
+                segments=segments
+            )
         else:
-            return FixResponse(fixed_url=f"file://{result}")
+            return FixResponse(
+                fixed_url=f"/static/{os.path.basename(result)}",
+                segments=segments
+            )
 
     except ValueError as e:
         stitcher_logger.error(f"Error: {e}")
