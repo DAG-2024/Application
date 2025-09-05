@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from "react";
-import EditableWordToken, { type WordToken } from "./editable-word-token";
+import React, { useMemo, useState, useRef, useEffect } from "react";
+import EditableWordToken, { type WordToken, type EditableWordTokenRef } from "./editable-word-token";
+import TokenSeparator from "./token-separator";
 
 export interface TokenRowProps {
   tokens: WordToken[];
@@ -13,7 +14,9 @@ export interface TokenRowProps {
  * - Keeps array order stable.
  * - When a token's text changes, we also set `to_synth=true` if it differs from original.
  */
-export default function TokenRow({ tokens, onChange, className }: TokenRowProps) {
+export default function TokenEditor({ tokens, onChange, className }: TokenRowProps) {
+  const [newlyCreatedIndex, setNewlyCreatedIndex] = useState<number | null>(null);
+  const tokenRefs = useRef<(EditableWordTokenRef | null)[]>([]);
   
   const handleTokenChange = (index: number) => (nextToken: WordToken) => {
     const adjusted: WordToken = {
@@ -24,18 +27,74 @@ export default function TokenRow({ tokens, onChange, className }: TokenRowProps)
     onChange?.(next);
   };
 
+  const handleTokenBlur = (index: number) => (token: WordToken) => {
+    // Check if the token is empty and remove it from the array
+    if (token.text.trim() === "") {
+      const next = tokens.filter((_, i) => i !== index);
+      onChange?.(next);
+    }
+  };
+
+  const createEmptyToken = (index: number): WordToken => {
+    const prevToken = tokens[index - 1];
+    const nextToken = tokens[index];
+    
+    // Calculate start and end times
+    const start = prevToken ? prevToken.end : (nextToken ? nextToken.start : 0);
+    const end = nextToken ? nextToken.start : (prevToken ? prevToken.end + 0.1 : 0.1);
+    
+    return {
+      start,
+      end,
+      text: "",
+      original_text: "",
+      isEdited: true,
+      predicted: false,
+      to_synth: true,
+      is_speech: true,
+    };
+  };
+
+  const handleInsertToken = (index: number) => {
+    const newToken = createEmptyToken(index);
+    const next = [...tokens];
+    next.splice(index, 0, newToken);
+    setNewlyCreatedIndex(index);
+    onChange?.(next);
+  };
+
+  // Focus newly created tokens
+  useEffect(() => {
+    if (newlyCreatedIndex !== null) {
+      // Ensure refs array is the right size
+      tokenRefs.current = tokenRefs.current.slice(0, tokens.length);
+      
+      // Focus the newly created token after a short delay to ensure DOM is updated
+      const timeoutId = setTimeout(() => {
+        const tokenRef = tokenRefs.current[newlyCreatedIndex];
+        if (tokenRef) {
+          tokenRef.focus();
+        }
+        setNewlyCreatedIndex(null);
+      }, 50);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [newlyCreatedIndex, tokens.length]);
+
   return (
     <div className={["token-row", className || ""].join(" ")}
          role="group"
          aria-label="Editable token row">
       {tokens.map((t, i) => (
         <React.Fragment key={`${t.start}-${t.end}-${i}`}>
-          <EditableWordToken token={t} onChange={handleTokenChange(i)} />
-          {i < tokens.length - 1 && (
-            <span className="token-space" aria-hidden>
-              {" "}
-            </span>
-          )}
+          <EditableWordToken 
+            ref={(el) => (tokenRefs.current[i] = el)}
+            token={t} 
+            onChange={handleTokenChange(i)} 
+            onBlur={handleTokenBlur(i)}
+          />
+          <TokenSeparator onInsertToken={() => handleInsertToken(i + 1)} />
         </React.Fragment>
       ))}
       <style>{`
