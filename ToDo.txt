@@ -1,18 +1,18 @@
 TODO: Frontend-UI:
-    1. add/ re-evaluate new word token when more than one word is added to a token edit
-    2. add/ adjustable timEline audio player cursor
-    3. add/ color explanations for colored words
-    4. add/ implement UI indication of where in timeline we synthesized words *** add some backend logic
-    5. add/ UI design
-    6. add/ Implement health check for all backend services
+    [ ] 1. add/ re-evaluate new word token when more than one word is added to a token edit
+    [ ] 2. add/ adjustable timEline audio player cursor
+    [ ] 3. add/ color explanations for colored words
+    [ ] 4. add/ implement UI indication of where in timeline we synthesized words *** add some backend logic
+    [ ] 5. add/ UI design
+    [ ] 6. add/ Implement health check for all backend services
 
 TODO: Backend:
-    1. Adjust word bleed to expand from synthesized words (GEFEN)
-    2. Add indications for problematic time segments from stitcher (Amit)
-    3. Add noise balancer (low priority-amit)
+    [X] 1. Adjust word bleed to expand from synthesized words (GEFEN)
+    [ ] 2. Add indications for problematic time segments from stitcher (Amit)
+    [ ] 3. Add noise balancer (low priority-amit)
 
 
 TODO: UTILS:
-    1.IMPLEMENT ADDITIONAL USE CASES!!!
-    2. Create a graph/ slide / flowchart explaining the flow
-    3. Prepare for presentation in terms of: Technical flow of things
+    [] 1.IMPLEMENT ADDITIONAL USE CASES!!!
+    [] 2. Create a graph/ slide / flowchart explaining the flow
+    [] 3. Prepare for presentation in terms of: Technical flow of things
