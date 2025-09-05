@@ -9,6 +9,7 @@ from typing import List
 import re
 import uvicorn
 
+
 log_dir = "log"
 os.makedirs(log_dir, exist_ok=True)
 
@@ -76,6 +77,8 @@ async def feed_audio(file: UploadFile = File(...)):
         whisper_transcription = segments_to_transcription(whisper_result)
         indexed_transcription = indexed_transcription_str(whisper_transcription)
 
+        app_logger.debug(f"Whisper:\t{whisper_transcription}")
+
         anomaly_res = ctx_anomaly_detector(whisper_transcription, indexed_transcription)
         anomaly_idxs_str = (anomaly_res.choices[0].message.content or "").strip()
         anomaly_idxs = parse_indices_string(anomaly_idxs_str) if anomaly_idxs_str else []
@@ -86,19 +89,22 @@ async def feed_audio(file: UploadFile = File(...)):
             whisper_json_or_path=whisper_result,
             low_conf_th = 0.3,         # confidence threshold for low-confidence words
 
-            w_conf_w = 0.50,            # weight for confidence term (low confidence => more likely to synth)
-            energy_w = 0.40,            # weight for energy overlap term
-            anomaly_w = 0.60,           # weight for anomaly term
+            w_conf_w = 0.59,            # weight for confidence term (low confidence => more likely to synth)
+            energy_w = 0.67,            # weight for energy overlap term
+            anomaly_w = 0.66,           # weight for anomaly term
             synth_score_th = 0.60,      # threshold to decide synthesis
 
             gap_min_dur = 0.12,         # ignore tiny gaps
             gap_energy_cov_th = 0.30,   # fraction of gap covered by energy to consider it noise
+            gap_energy_score_th = 0.75,  # min energy score to consider gap as noise
 
             plot_spectrogram = True     # plot spectrogram for logging/debugging
         )
 
         template = " ".join([t.text for t in tokens])
+        app_logger.debug(f"Template:\t{template}")
         predicted = word_predictor(template)
+        app_logger.debug(f"Predicted:\t{predicted}")
         wordtokens = align_blanks_and_predicted(tokens, predicted)
 
 

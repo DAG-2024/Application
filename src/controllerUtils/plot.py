@@ -166,8 +166,8 @@ def plot_speech_spectrogram(
                         facecolor=(0.1, 0.9, 0.2, 0.25),
                     )
                 )
-                lbl = f"{ev.get('label', 'noise')}:[{ev.get('start_time', 0):.2f}-{ev.get('end_time', 0):.2f}]"
-                ax.text(s, y1, lbl, va="bottom", ha="left", fontsize=8, color=(0.1, 0.9, 0.2, 1.0))
+                lbl = f"{ev.get('label', 'noise')}({ev.get('score', 0.0)}):[{ev.get('start_time', 0):.2f}-{ev.get('end_time', 0):.2f}]"
+                ax.text(s, y1, lbl, va="bottom", ha="left", fontsize=6, color=(0.1, 0.9, 0.2, 1.0))
         indent += indent_increment
 
     if anomaly_segments is not None:
@@ -185,7 +185,7 @@ def plot_speech_spectrogram(
                 )
             )
             lbl = f"anomaly:[{s:.2f}-{e:.2f}]"
-            ax.text(s, y1 + indent, lbl, va="bottom", ha="left", fontsize=8, color=(0.1, 0.1, 0.9, 1.0))
+            ax.text(s, y1 + indent, lbl, va="bottom", ha="left", fontsize=6, color=(0.1, 0.1, 0.9, 1.0))
         indent += indent_increment
 
     if low_conf_segments is not None:
@@ -205,7 +205,7 @@ def plot_speech_spectrogram(
                     )
                 )
                 lbl = f"low_conf({conf:.2f}):[{s:.2f}-{e:.2f}]"
-                ax.text(s, y1 + indent, lbl, va="bottom", ha="left", fontsize=8, color=(0.9, 0.5, 0.2, 1.0))
+                ax.text(s, y1 + indent, lbl, va="bottom", ha="left", fontsize=6, color=(0.9, 0.5, 0.2, 1.0))
 
     ax.set_xlim(0, t_axis[-1] if len(t_axis) else (len(y) / sr))
     plt.tight_layout()

@@ -127,7 +127,7 @@ const Index = () => {
       
       formData.append("payload", payload);
 
-      const response = await fetch("http://0.0.0.0:9001/fix-audio", {
+      const response = await fetch("http://localhost:9001/fix-audio", {
         method: "POST",
         body: formData,
       });
@@ -147,7 +147,7 @@ const Index = () => {
       if (fixedUrl.startsWith('file://')) {
         const filePath = fixedUrl.replace('file://', '');
         const fileName = filePath.split('/').pop();
-        processedUrl = `http://0.0.0.0:9001/audio/${fileName}`;
+        processedUrl = `http://localhost:9001/audio/${fileName}`;
       }
       
       setFinalAudioUrl(processedUrl);

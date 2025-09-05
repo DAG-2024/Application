@@ -24,7 +24,7 @@ from controllerUtils.plot import (
 log_dir = "log"
 os.makedirs(log_dir, exist_ok=True)
 detection_logger = logging.getLogger("detection")
-detection_logger.setLevel(logging.INFO)
+detection_logger.setLevel(logging.DEBUG)
 
 # Avoid adding multiple handlers if re-imported
 if not detection_logger.handlers:
@@ -98,13 +98,14 @@ def build_word_tokens_of_detection(
     # Context anomalies:
     anomaly_word_idx: Optional[Iterable[int]] = None,
     # Calculated fusion weights / threshold:
-    w_conf_w: float = 0.50,      # weight for confidence term (low confidence => more likely to synth)
-    energy_w: float = 0.40,      # weight for energy overlap term
+    w_conf_w: float = 0.70,      # weight for confidence term (low confidence => more likely to synth)
+    energy_w: float = 0.90,      # weight for energy overlap term
     anomaly_w: float = 0.60,     # weight for anomaly term
     synth_score_th: float = 0.60, # threshold to decide synthesis
     # --- Gap handling params ---
     gap_min_dur: float = 0.12,          # ignore tiny gaps
     gap_energy_cov_th: float = 0.30,     # fraction of gap covered by energy to consider it noise
+    gap_energy_score_th: float = 0.75,  # min energy score to consider gap as noise
     # --- Plotting params (if plotting is enabled) ---
     plot_spectrogram: bool = True,
 ):
@@ -167,8 +168,8 @@ def build_word_tokens_of_detection(
                     start=float(w.start),
                     end=float(w.end),
                     text=out_text,
-                    to_synth=bool(to_synth),
-                    is_speech=True,  #is_speech_interval(w.start, w.end),
+                    to_synth=bool(to_synth and (i in word_anom)),
+                    is_speech=True,
                     synth_path=None,
                 )
             )
@@ -186,7 +187,7 @@ def build_word_tokens_of_detection(
             gap_frac = ov / gap_dur if gap_dur > 0.0 else 0.0
 
             # Check if gap is mostly noise
-            is_noise = (gap_frac >= gap_energy_cov_th)
+            is_noise = (gap_frac >= gap_energy_cov_th and energy_score >= gap_energy_score_th)
 
             if is_noise and not w0.to_synth and not w1.to_synth:
                 # Insert a blank token for the gap

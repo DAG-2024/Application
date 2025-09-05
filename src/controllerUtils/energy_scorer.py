@@ -110,8 +110,9 @@ def detect_energy_segments(
         return "normal_speech"
 
     def compute_score(mean_db):
-        raw = (mean_db - weak_thresh_db) / (noise_thresh_db - weak_thresh_db)
-        return float(np.clip(raw, 0.0, 1.0))
+        # center around noise_thresh_db
+        scale = 2.0  # adjust sharpness
+        return float(1 / (1 + np.exp(-(mean_db - noise_thresh_db) * scale)))
 
     # segments hold provisional fields: start, end, label, sum_db, count
     segments = []
