@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle } from "react";
 
 export type WordToken = {
   start: number;
@@ -16,9 +16,15 @@ export interface EditableWordTokenProps {
   token: WordToken;
   /** Called whenever the text changes. Receives the updated token. */
   onChange?: (next: WordToken) => void;
+  /** Called when the token loses focus (onBlur). Receives the current token. */
+  onBlur?: (token: WordToken) => void;
   className?: string;
   /** If true, disallow spaces/newlines inside the token. Default: true */
   singleWord?: boolean;
+}
+
+export interface EditableWordTokenRef {
+  focus: () => void;
 }
 
 /**
@@ -29,12 +35,13 @@ export interface EditableWordTokenProps {
  * - When the current text differs from the original, toke.isEdited is set to true.
  * - The token is rendered in GREEN if toke.predicted is true, BLUE if toke.isEdited is true, otherwise in black.
  */
-export default function EditableWordToken({
+const EditableWordToken = forwardRef<EditableWordTokenRef, EditableWordTokenProps>(({
   token,
   onChange,
+  onBlur,
   className,
-  singleWord = false,
-}: EditableWordTokenProps) {
+  singleWord = true,
+}, forwardedRef) => {
 
 
   const emitChange = () => {
@@ -49,11 +56,17 @@ export default function EditableWordToken({
     onChange?.(next);
   };
 
-  const ref = useRef<HTMLSpanElement>(null);
+  const internalRef = useRef<HTMLSpanElement>(null);
+
+  useImperativeHandle(forwardedRef, () => ({
+    focus: () => {
+      internalRef.current?.focus();
+    },
+  }));
 
   // Sanitize and emit on each input
   const handleInput = () => {
-    const el = ref.current;
+    const el = internalRef.current;
     if (!el) return;
     let next = el.innerText ?? "";
     if (singleWord) {
@@ -67,8 +80,8 @@ export default function EditableWordToken({
       // Normalize the DOM if we stripped characters
       // (defer to keep caret sane)
       requestAnimationFrame(() => {
-        if (ref.current && ref.current.innerText !== next) {
-          ref.current.innerText = next;
+        if (internalRef.current && internalRef.current.innerText !== next) {
+          internalRef.current.innerText = next;
         }
       });
     }
@@ -85,24 +98,30 @@ export default function EditableWordToken({
     }
   };
 
+  const handleBlur: React.FocusEventHandler<HTMLSpanElement> = () => {
+    onBlur?.(token);
+  };
+
   // Ensure DOM reflects the current controlled text
   useEffect(() => {
-    if (ref.current && (ref.current.innerText ?? "") !== token.text) {
-      ref.current.innerText = token.text;
+    if (internalRef.current && (internalRef.current.innerText ?? "") !== token.text) {
+      internalRef.current.innerText = token.text;
     }
   }, [token.text]);
 
   return (
     <span
-      ref={ref}
+      ref={internalRef}
       role="textbox"
       contentEditable
       suppressContentEditableWarning
       onInput={handleInput}
       onKeyDown={handleKeyDown}
+      onBlur={handleBlur}
       className={[
         "inline-block rounded-md px-0.5",
         token.isEdited ? "text-blue-600 bg-blue-50" : token.predicted ? "text-green-600 bg-green-50" : "text-black",
+        token.text === "" ? "min-w-[2ch]" : "",
         className || "",
       ].join(" ")}
       style={{
@@ -112,4 +131,8 @@ export default function EditableWordToken({
       aria-label="Editable token"
     />
   );
-}
+});
+
+EditableWordToken.displayName = "EditableWordToken";
+
+export default EditableWordToken;

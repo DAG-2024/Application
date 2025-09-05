@@ -18,10 +18,12 @@ const formatTime = (s: number) => {
 
 export function AudioPlayer({ src }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const progressRef = useRef<HTMLDivElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -78,6 +80,53 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
     }
   };
 
+  const seekTo = (clientX: number) => {
+    const audio = audioRef.current;
+    const progressBar = progressRef.current;
+    if (!audio || !progressBar || !duration) return;
+
+    const rect = progressBar.getBoundingClientRect();
+    const clickX = clientX - rect.left;
+    const percentage = Math.max(0, Math.min(1, clickX / rect.width));
+    const newTime = percentage * duration;
+    
+    audio.currentTime = newTime;
+    setCurrentTime(newTime);
+    setProgress(percentage * 100);
+  };
+
+  const handleProgressClick = (e: React.MouseEvent) => {
+    if (!canControl) return;
+    seekTo(e.clientX);
+  };
+
+  const handleProgressMouseDown = (e: React.MouseEvent) => {
+    if (!canControl) return;
+    setIsDragging(true);
+    seekTo(e.clientX);
+  };
+
+  const handleProgressMouseMove = (e: MouseEvent) => {
+    if (!isDragging || !canControl) return;
+    seekTo(e.clientX);
+  };
+
+  const handleProgressMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  // Add global mouse event listeners for dragging
+  useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mousemove', handleProgressMouseMove);
+      document.addEventListener('mouseup', handleProgressMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleProgressMouseMove);
+        document.removeEventListener('mouseup', handleProgressMouseUp);
+      };
+    }
+  }, [isDragging, canControl, duration]);
+
   return (
     <div className="w-full rounded-lg border bg-card p-4 shadow-elegant">
       <div className="flex items-center gap-4">
@@ -95,7 +144,24 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
           )}
         </Button>
         <div className="flex-1">
-          <Progress value={progress} />
+          <div 
+            ref={progressRef}
+            className={`relative h-2 bg-secondary rounded-full cursor-pointer transition-colors ${
+              canControl ? 'hover:bg-secondary/80' : 'cursor-not-allowed'
+            }`}
+            onClick={handleProgressClick}
+            onMouseDown={handleProgressMouseDown}
+          >
+            <div 
+              className="absolute top-0 left-0 h-full bg-primary rounded-full transition-all duration-100"
+              style={{ width: `${progress}%` }}
+            />
+            {/* Progress handle/thumb */}
+            <div 
+              className="absolute top-1/2 w-4 h-4 bg-primary rounded-full border-2 border-background shadow-md transform -translate-y-1/2 transition-all duration-100 hover:scale-110"
+              style={{ left: `calc(${progress}% - 8px)` }}
+            />
+          </div>
           <div className="mt-1 text-xs text-muted-foreground">
             {formatTime(currentTime)} / {formatTime(duration)}
           </div>
