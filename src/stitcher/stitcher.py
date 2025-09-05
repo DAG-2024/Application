@@ -129,7 +129,7 @@ def make_voice_print(orig_path: str, wordTokens: List[WordToken]) -> (str, str):
     return out, transcription # local path and transcription text
 
 
-def _word_bleed(wordTokens: List[WordToken], index: int):
+def _word_bleed(wordTokens: List[WordToken], index: int, bleed_range_left: int = 3, bleed_range_right: int = 3):
     """
     Adjust word tokens to synthesize whole sentences without overlap.
     If a word is marked for synthesis, its neighbors are adjusted to avoid overlap.
@@ -139,14 +139,16 @@ def _word_bleed(wordTokens: List[WordToken], index: int):
     continue_left = True
     continue_right = True
 
-    for i in range(1, 3):
-
+    i, j = 1, 1
+    while continue_left or continue_right:
         continue_left = (continue_left
+                         and i <= bleed_range_left
                          and index - i >= 0
                          and wordTokens[index - i].is_speech
                          and wordTokens[index - i].text[-1] not in ".!?,;:")
 
         continue_right = (continue_right
+                          and j <= bleed_range_right
                           and index + i < len(wordTokens)
                           and wordTokens[index + i].is_speech
                           and wordTokens[index + i - 1].text[-1] not in ".!?,;:")
@@ -154,18 +156,19 @@ def _word_bleed(wordTokens: List[WordToken], index: int):
         if continue_left:
             wordTokens[index].text = wordTokens[index - i].text + " " + wordTokens[index].text
             wordTokens[index - i].is_speech = False
+            if wordTokens[index - i].to_synth:
+                bleed_range_left += 1
 
         if continue_right:
             wordTokens[index].text += " " + wordTokens[index + i].text
             wordTokens[index + i].is_speech = False
+            if wordTokens[index + i].to_synth:
+                bleed_range_right += 1
 
     wordTokens[index].text = normalize_text(wordTokens[index].text)
 
 def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
-
-    stitcher_logger.debug(f"TEST123")
-
     for i, s in enumerate(wordTokens):
         if s.to_synth and s.is_speech:
             # Adjust neighbors to avoid overlap
@@ -257,7 +260,6 @@ async def fix_audio(
         from .models.stitcherModels import wordtokens_from_json
         word_tokens = wordtokens_from_json(payload)
 
-
         orig_path = await save_upload_file(file)
         vp_path, transcription = make_voice_print(orig_path, word_tokens)
         synth_segments(vp_path, word_tokens, transcription)
@@ -278,8 +280,8 @@ async def fix_audio(
             return FixResponse(fixed_url=f"file://{result}")
 
     except ValueError as e:
-        logger.error(f"Error: {e}")
+        stitcher_logger.error(f"Error: {e}")
         raise HTTPException(status_code=422, detail=f"Invalid payload: {str(e)}")
     except Exception as e:
-        logger.error(f"Error: {e}")
+        stitcher_logger.error(f"Error: {e}")
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
