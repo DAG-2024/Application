@@ -9,7 +9,7 @@ import TokenEditor from "@/components/ui/tokens-editor";
 const Index = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [originalAudioUrl, setOriginalAudioUrl] = useState<string | null>(null);
   const [transcriptionResults, setTranscriptionResults] = useState<WordToken[]>([]);
   const [isGeneratingTranscription, setIsGeneratingTranscription] = useState(false);
   const [isProcessingAudio, setIsProcessingAudio] = useState(false);
@@ -18,9 +18,9 @@ const Index = () => {
 
   useEffect(() => {
     return () => {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      if (originalAudioUrl) URL.revokeObjectURL(originalAudioUrl);
     };
-  }, [audioUrl]);
+  }, [originalAudioUrl]);
 
 
   const onChooseFile = () => {
@@ -30,10 +30,10 @@ const Index = () => {
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (originalAudioUrl) URL.revokeObjectURL(originalAudioUrl);
     const url = URL.createObjectURL(file);
     setAudioFile(file);
-    setAudioUrl(url);
+    setOriginalAudioUrl(url);
   };
 
   const onGenerateTranscription = async () => {
@@ -245,11 +245,11 @@ const Index = () => {
           <h2 id="player-heading" className="text-lg font-semibold mb-3">Original Audio</h2>
           <div className="flex items-center gap-3">
             <div className="flex-1">
-              <AudioPlayer src={audioUrl} />
+              <AudioPlayer src={originalAudioUrl} />
             </div>
-            {audioUrl ? (
+            {originalAudioUrl ? (
               <Button asChild variant="white" size="icon" className="transition-smooth">
-                <a href={audioUrl} download={audioFile?.name || "audio-file"}>
+                <a href={originalAudioUrl} download={audioFile?.name || "audio-file"}>
                   <Download className="h-4 w-4" />
                 </a>
               </Button>
@@ -263,19 +263,31 @@ const Index = () => {
         </section>
 
         {/* Final processed audio section */}
-        {finalAudioUrl && (
+        {(finalAudioUrl || isProcessingAudio) && (
           <section aria-labelledby="final-player-heading" className="space-y-3">
             <div className="rounded-lg border bg-card p-4 shadow-elegant">
             <h2 id="final-player-heading" className="text-lg font-semibold mb-3">Processed Audio</h2>
             <div className="flex items-center gap-3">
               <div className="flex-1">
-                <AudioPlayer src={finalAudioUrl} />
+                {isProcessingAudio ? (
+                  <div className="flex items-center justify-center h-16 bg-muted rounded-lg">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <AudioPlayer src={finalAudioUrl} />
+                )}
               </div>
-              <Button asChild variant="white" size="icon" className="transition-smooth">
-                <a href={finalAudioUrl} download="processed-audio.wav">
+              {finalAudioUrl && !isProcessingAudio ? (
+                <Button asChild variant="white" size="icon" className="transition-smooth">
+                  <a href={finalAudioUrl} download="processed-audio.wav">
+                    <Download className="h-4 w-4" />
+                  </a>
+                </Button>
+              ) : (
+                <Button variant="white" size="icon" disabled>
                   <Download className="h-4 w-4" />
-                </a>
-              </Button>
+                </Button>
+              )}
             </div>
             </div>
           </section>

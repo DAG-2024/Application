@@ -1,5 +1,7 @@
 import logging
-
+from pathlib import Path
+import librosa
+import soundfile as sf
 from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -14,6 +16,8 @@ from tempfile import gettempdir
 from fastapi.middleware.cors import CORSMiddleware
 from pydub import AudioSegment
 import pyloudnorm as pyln
+import uuid
+
 
 
 log_dir = "log"
@@ -40,7 +44,7 @@ app.add_middleware(
 )
 
 # Mount static files directory for serving generated audio files
-app.mount("/static", StaticFiles(directory=gettempdir()), name="static")
+# app.mount("/static", StaticFiles(directory=gettempdir()), name="static")
 
 
 async def save_upload_file(upload: UploadFile) -> str:
@@ -168,6 +172,45 @@ def _word_bleed(wordTokens: List[WordToken], index: int, bleed_range_left: int =
 
     wordTokens[index].text = normalize_text(wordTokens[index].text)
 
+def trim_leading_silence(
+    in_path: str,
+    *,
+    top_db: int = 25,
+    frame_length: int = 2048,
+    hop_length: int = 512,
+    pad_ms: int = 80,
+):
+    """
+    Remove leading silence from an audio file and overwrite the original.
+    - top_db: how aggressively to consider sections "non-silent" (lower = stricter silence).
+    - pad_ms: keep a short pre-roll so speech onsets aren't clipped.
+    """
+    y, sr = librosa.load(in_path, sr=None, mono=True)  # mono mix; native sr
+
+    # Find all non-silent regions
+    intervals = librosa.effects.split(
+        y, top_db=top_db, frame_length=frame_length, hop_length=hop_length
+    )
+    if len(intervals) == 0:
+        # Entire file is silent: keep as-is
+        start = 0
+    else:
+        start = intervals[0, 0]
+
+    # Apply pre-roll padding
+    pad = int(sr * (pad_ms / 1000.0))
+    start = max(0, start - pad)
+
+    y_out = y[start:]
+
+    # Overwrite original
+    sf.write(in_path, y_out, sr, subtype="PCM_16")
+    return in_path
+
+# Example:
+# path = trim_leading_silence("sample.wav", pad_ms=60)
+# print("Overwritten:", path)
+
 def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
     for i, s in enumerate(wordTokens):
@@ -197,6 +240,7 @@ def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str
             out = os.path.join(gettempdir(), uuid.uuid4().hex + ext)
             with open(out, "wb") as f:
                 f.write(resp.content)
+            trim_leading_silence(out)
             s.synth_path = out
 
 def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
@@ -227,7 +271,8 @@ def stitch_all(orig_path: str, wordTokens: List[WordToken]) -> str:
             c2="tri"
         )
 
-    out_path = os.path.join(gettempdir(), "gen.wav")
+    unique_id = str(uuid.uuid4())
+    out_path = os.path.join(gettempdir(), f"gen.{unique_id}.wav")
     ffmpeg.output(cur, out_path).run(overwrite_output=True)
     return out_path  # local path
 
