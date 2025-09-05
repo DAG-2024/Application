@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { AudioPlayer } from "@/components/AudioPlayer";
-import { RotateCcw, Loader2 } from "lucide-react";
+import { RotateCcw, Loader2, Download } from "lucide-react";
 import type { WordToken } from "@/types";
 import TokenEditor from "@/components/ui/tokens-editor"; // <-- adjust path as needed
 
@@ -235,42 +235,49 @@ const Index = () => {
             {isProcessingAudio ? "Processing..." : "Submit"}
           </Button>
         </section>
-
+         {/* Original audio section */}
         <section aria-labelledby="player-heading" className="space-y-3">
-          <h2 id="player-heading" className="sr-only">Audio player</h2>
-          <AudioPlayer src={audioUrl} />
+          <div className="rounded-lg border bg-card p-4 shadow-elegant">
+          <h2 id="player-heading" className="text-lg font-semibold mb-3">Original Audio</h2>
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <AudioPlayer src={audioUrl} />
+            </div>
+            {audioUrl ? (
+              <Button asChild variant="white" size="icon" className="transition-smooth">
+                <a href={audioUrl} download={audioFile?.name || "audio-file"}>
+                  <Download className="h-4 w-4" />
+                </a>
+              </Button>
+            ) : (
+              <Button variant="white" size="icon" disabled>
+                <Download className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+          </div>
         </section>
 
         {/* Final processed audio section */}
         {finalAudioUrl && (
           <section aria-labelledby="final-player-heading" className="space-y-3">
-            <h2 id="final-player-heading" className="text-lg font-semibold">Processed Audio</h2>
             <div className="rounded-lg border bg-card p-4 shadow-elegant">
-              <AudioPlayer src={finalAudioUrl} />
-              <div className="mt-3">
-                <Button asChild variant="white" className="transition-smooth">
-                  <a href={finalAudioUrl} download="processed-audio.wav">
-                    Download processed audio
-                  </a>
-                </Button>
+            <h2 id="final-player-heading" className="text-lg font-semibold mb-3">Processed Audio</h2>
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                <AudioPlayer src={finalAudioUrl} />
               </div>
+              <Button asChild variant="white" size="icon" className="transition-smooth">
+                <a href={finalAudioUrl} download="processed-audio.wav">
+                  <Download className="h-4 w-4" />
+                </a>
+              </Button>
+            </div>
             </div>
           </section>
         )}
 
-        <section>
-          {audioUrl ? (
-            <Button asChild variant="white" className="transition-smooth">
-              <a href={finalAudioUrl} download={audioFile?.name || "audio-file"}>
-                Download audio
-              </a>
-            </Button>
-          ) : (
-            <Button variant="white" disabled>
-              Download audio
-            </Button>
-          )}
-        </section>
+        
       </main>
     </div>
   );
