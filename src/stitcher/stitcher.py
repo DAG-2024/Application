@@ -169,9 +169,6 @@ def _word_bleed(wordTokens: List[WordToken], index: int, bleed_range_left: int =
 
 def synth_segments(vp_path: str, wordTokens: List[WordToken], transcription: str):
     """Send each bad clip’s text + voice-print file to TTS, save returned audio."""
-
-    stitcher_logger.debug(f"TEST123")
-
     for i, s in enumerate(wordTokens):
         if s.to_synth and s.is_speech:
             # Adjust neighbors to avoid overlap
