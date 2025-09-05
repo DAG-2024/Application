@@ -8,7 +8,7 @@ coarser 'segments' that are easy to color on a waveform.
 from typing import List, Dict, Optional
 import os
 import ffmpeg
-from stitcherModels import WordToken, Segment
+from .models.stitcherModels import WordToken, Segment
 
 # must match your acrossfade in stitch_all()
 DEFAULT_CROSSFADE = 0.02  # seconds
