@@ -4,7 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { RotateCcw, Loader2, Download } from "lucide-react";
 import type { WordToken } from "@/types";
-import TokenEditor from "@/components/ui/tokens-editor"; // <-- adjust path as needed
+import TokenEditor from "@/components/ui/tokens-editor";
 
 const Index = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -21,6 +21,7 @@ const Index = () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
     };
   }, [audioUrl]);
+
 
   const onChooseFile = () => {
     fileInputRef.current?.click();
@@ -96,6 +97,8 @@ const Index = () => {
   };
 
   const onSubmit = async () => {
+    console.log(transcriptionResults);
+
     if (!audioFile || transcriptionResults.length === 0) {
       toast({
         title: "Missing data",
@@ -140,7 +143,8 @@ const Index = () => {
       
       // Extract the fixed audio URL from the response
       const fixedUrl = data.fixed_url;
-      
+      const segments = data.segments;
+      console.log(segments);
       // The backend returns file:// URLs, but we need to serve them properly
       // Convert file:// URLs to a proper endpoint that serves the audio files
       let processedUrl = fixedUrl;

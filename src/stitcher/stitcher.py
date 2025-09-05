@@ -277,15 +277,10 @@ async def fix_audio(
             balanced_audio = audio.apply_gain(loudness_diff)
             balanced_path = os.path.join(gettempdir(), f"balanced_{os.path.basename(result)}")
             balanced_audio.export(balanced_path, format="wav")
-            return FixResponse(
-                fixed_url=f"/static/{os.path.basename(balanced_path)}",
-                segments=segments
-            )
+
+            return FixResponse(fixed_url=f"file://{balanced_path}", segments=segments)
         else:
-            return FixResponse(
-                fixed_url=f"/static/{os.path.basename(result)}",
-                segments=segments
-            )
+            return FixResponse(fixed_url=f"file://{result}", segments=segments)
 
     except ValueError as e:
         stitcher_logger.error(f"Error: {e}")

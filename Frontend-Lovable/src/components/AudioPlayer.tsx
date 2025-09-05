@@ -156,11 +156,6 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
               className="absolute top-0 left-0 h-full bg-primary rounded-full transition-all duration-100"
               style={{ width: `${progress}%` }}
             />
-            {/* Progress handle/thumb */}
-            <div 
-              className="absolute top-1/2 w-4 h-4 bg-primary rounded-full border-2 border-background shadow-md transform -translate-y-1/2 transition-all duration-100 hover:scale-110"
-              style={{ left: `calc(${progress}% - 8px)` }}
-            />
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
             {formatTime(currentTime)} / {formatTime(duration)}
