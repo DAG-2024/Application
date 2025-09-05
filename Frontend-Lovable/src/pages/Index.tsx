@@ -4,7 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { RotateCcw, Loader2 } from "lucide-react";
 import type { WordToken } from "@/types";
-import TokenRow from "@/components/ui/tokens-editor"; // <-- adjust path as needed
+import TokenEditor from "@/components/ui/tokens-editor"; // <-- adjust path as needed
 
 const Index = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -205,12 +205,11 @@ const Index = () => {
       </header>
 
       <main className="container mx-auto max-w-3xl px-4 pb-16 space-y-6">
-        {/* --- Token editor (replaces the textarea) --- */}
         <section aria-labelledby="tokens-heading">
           <h2 id="tokens-heading" className="sr-only">Token editor</h2>
           <div className="rounded-lg border bg-card p-4 shadow-elegant">
             {transcriptionResults.length > 0 ? (
-              <TokenRow
+              <TokenEditor
                 tokens={transcriptionResults}
                 onChange={setTranscriptionResults}
               />
