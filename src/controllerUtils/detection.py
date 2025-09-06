@@ -1,5 +1,5 @@
 from typing import List, Optional, Tuple, Iterable, Set, Dict, Any
-from stitcher.models.stitcherModels import WordToken
+from src.stitcher.models.stitcherModels import WordToken
 import json
 import sys
 from pathlib import Path
@@ -12,11 +12,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from controllerUtils.energy_scorer import (
+from src.controllerUtils.energy_scorer import (
     detect_energy
 )
 
-from controllerUtils.plot import (
+from src.controllerUtils.plot import (
     plot_speech_spectrogram
 )
 
