@@ -146,19 +146,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
 #------------Helper Functions------------
 
-def print_low_confidence_words(whisper_res, thresh):
-    print(f"Words below {thresh} confidence score:\n")
-    for segment in whisper_res.get("segments", []):
-        for word_info in segment.get("words", []):
-            if word_info.get("score", 1.0) < thresh:
-                print(f"'{word_info['word']}'  --  score: '{word_info['score']:.2f}'")
-
-def print_loud_noise_segments(segments):
-    print("Loud noise detection: \n")
-    for segment in segments:
-        if segment.get('label') == 'loud_noise':
-            print(segment)
-
 def segments_to_transcription(data):
     """
     Given WhisperX-style segmented output with word-level timing and scores,
@@ -183,110 +170,43 @@ def indexed_transcription_str(text):
 def parse_indices_string(s):
     return [int(num.strip()) for num in s.split(',')]
 
-def intersect_with_low_confidence_score(whisper_res, wrong_words_indices: list, thresh=0.3):
-    """
-    Given a WhisperX-style transcript and a list of word indexes,
-    return a list of indexes where the word's confidence score < 0.3.
-    """
-    all_words = []
-    for segment in whisper_res.get('segments', []):
-        all_words.extend(segment.get('words', []))
-
-    return [
-        idx for idx in wrong_words_indices
-        if 0 <= idx < len(all_words) and all_words[idx].get('score', 1.0) < thresh
-    ]
-
-def adjust_by_noise_segments(all_words, loud_noise_segments):
-    """
-    Given a flat list of words (all_words) and a list of loud noise intervals,
-    replaces words that overlap with '[blank]'. If no words overlap a noise interval,
-    inserts a new '[blank]' word in the appropriate position in all_words.
-
-    Modifies all_words in-place.
-    """
-    # Sort all_words by start time to enable ordered insertion
-    all_words.sort(key=lambda w: float(w.start))
-
-    for noise in loud_noise_segments:
-        if noise['label'] == 'loud_noise':
-            start = float(noise['start_time'])
-            end = float(noise['end_time'])
-
-            matched = False
-            for word in all_words:
-                word_start = float(word['start'])
-                word_end = float(word['end'])
-
-                if word_start < end and word_end > start:
-                    word['word'] = '[blank]'
-                    word['start'] = max(word_start, start)
-                    word['end'] = min(word_end, end)
-                    matched = True
-
-            if not matched:
-                # Insert a new '[blank]' word into the correct position
-                new_word = {'word': '[blank]', 'start': start, 'end': end, 'score': 0.0}
-                inserted = False
-                for i, word in enumerate(all_words):
-                    if float(word['start']) > end:
-                        all_words.insert(i, new_word)
-                        inserted = True
-                        break
-                if not inserted:
-                    all_words.append(new_word)
-
-    # Ensure all_words remains sorted
-    all_words.sort(key=lambda w: float(w.start))
-    return all_words
-
-
-def insert_blank_and_modify_timestamp(whisper_res, indexes):
-    """
-    Adjust timestamps of words at given indexes:
-    - start time is set to end time of previous word
-    - end time is set to start time of next word
-
-    Modifies the transcript in place.
-    """
-    # Flatten words into a list of (word_dict, segment_ref)
-    all_words = []
-    for segment in whisper_res.get('segments', []):
-        for word in segment.get('words', []):
-            all_words.append(word)
-
-    for idx in indexes:
-        if 1 <= idx < len(all_words) - 1:
-            prev_word = all_words[idx - 1]
-            curr_word = all_words[idx]
-            next_word = all_words[idx + 1]
-
-            curr_word['start'] = float(prev_word['end'])
-            curr_word['word'] = '[blank]'
-            curr_word['end'] = float(next_word['start'])
-        # Optional: skip edge cases (first or last word) silently
-    return all_words
-
 def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
     pred_words = predicted_text.strip().split()
 
     wordtokens = []
     orig_idx = 0
     pred_idx = 0
-    while orig_idx < len(pre_tokens):
+
+    while orig_idx < len(pre_tokens) and pred_idx < len(pred_words):
         w = pre_tokens[orig_idx]
+
         if w.text == '[blank]':
-            # Find the next non-blank word in the original
-            next_non_blank = None
+            # Handle blank tokens - find next non-blank to determine boundary
+            next_non_blank_idx = None
             for j in range(orig_idx + 1, len(pre_tokens)):
                 if pre_tokens[j].text != '[blank]':
-                    next_non_blank = pre_tokens[j].text
+                    next_non_blank_idx = j
                     break
-            phrase = []
-            while pred_idx < len(pred_words) and (next_non_blank is None or pred_words[pred_idx] != next_non_blank):
-                phrase.append(pred_words[pred_idx])
+
+            # Collect predicted words until we hit the next non-blank match
+            blank_phrase = []
+            while pred_idx < len(pred_words):
+                if next_non_blank_idx is not None:
+                    # Check if current predicted word matches the next non-blank
+                    if _words_match(pred_words[pred_idx], pre_tokens[next_non_blank_idx].text):
+                        break
+                    # Check if combined predicted words match the next non-blank
+                    combined = ' '.join(blank_phrase + [pred_words[pred_idx]])
+                    if _words_match(combined.replace(' ', ''), pre_tokens[next_non_blank_idx].text):
+                        blank_phrase.append(pred_words[pred_idx])
+                        pred_idx += 1
+                        break
+
+                blank_phrase.append(pred_words[pred_idx])
                 pred_idx += 1
-            for word in phrase:
+
+            # Add synthesized words for the blank
+            for word in blank_phrase:
                 wordtokens.append(WordToken(
                     start=w.start,
                     end=w.end,
@@ -296,9 +216,11 @@ def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
                     synth_path=None
                 ))
             orig_idx += 1
+
         else:
-            # If the predicted word matches, consume it
-            if pred_idx < len(pred_words) and re.sub(r'[\.!\?,;:]+$', '', pred_words[pred_idx]) == re.sub(r'[\.!\?,;:]+$', '', w.text):
+            # Handle non-blank tokens - check for exact match, combination, or change
+            if _words_match(pred_words[pred_idx], w.text):
+                # Exact match
                 wordtokens.append(WordToken(
                     start=w.start,
                     end=w.end,
@@ -308,16 +230,102 @@ def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
                     synth_path=None
                 ))
                 pred_idx += 1
+                orig_idx += 1
+
             else:
-                # If not matching, just add the original word
-                wordtokens.append(WordToken(
-                    start=w.start,
-                    end=w.end,
-                    text=w.text,
-                    to_synth=False,
-                    is_speech=True,
-                    synth_path=None
-                ))
-            orig_idx += 1
+                # Check if multiple predicted words combine to match original
+                combined_pred = pred_words[pred_idx]
+                temp_pred_idx = pred_idx + 1
+
+                while temp_pred_idx < len(pred_words) and not _words_match(combined_pred, w.text):
+                    combined_pred += pred_words[temp_pred_idx]
+                    temp_pred_idx += 1
+
+                if _words_match(combined_pred, w.text):
+                    # Multiple predicted words match one original - use original timing
+                    wordtokens.append(WordToken(
+                        start=w.start,
+                        end=w.end,
+                        text=combined_pred,
+                        to_synth=False,
+                        is_speech=True,
+                        synth_path=None
+                    ))
+                    pred_idx = temp_pred_idx
+                    orig_idx += 1
+
+                else:
+                    # Check if one predicted word matches multiple original words
+                    combined_orig = format_text(w.text)
+                    temp_orig_idx = orig_idx + 1
+
+                    while temp_orig_idx < len(pre_tokens) and pre_tokens[temp_orig_idx].text != '[blank]':
+                        combined_orig += format_text(pre_tokens[temp_orig_idx].text)
+                        if _words_match(pred_words[pred_idx], combined_orig):
+                            # One predicted word matches multiple original words
+                            wordtokens.append(WordToken(
+                                start=w.start,
+                                end=pre_tokens[temp_orig_idx].end,
+                                text=pred_words[pred_idx],
+                                to_synth=True,  # Changed word, needs synthesis
+                                is_speech=True,
+                                synth_path=None
+                            ))
+                            pred_idx += 1
+                            orig_idx = temp_orig_idx + 1
+                            break
+                        temp_orig_idx += 1
+                    else:
+                        # No match found - word was changed, needs synthesis
+                        wordtokens.append(WordToken(
+                            start=w.start,
+                            end=w.end,
+                            text=pred_words[pred_idx],
+                            to_synth=True,
+                            is_speech=True,
+                            synth_path=None
+                        ))
+                        pred_idx += 1
+                        orig_idx += 1
+
+    # Handle remaining predicted words if any
+    while pred_idx < len(pred_words):
+        # Use timing from last token if available
+        last_end = wordtokens[-1].end if wordtokens else 0.0
+        wordtokens.append(WordToken(
+            start=last_end,
+            end=last_end,
+            text=pred_words[pred_idx],
+            to_synth=True,
+            is_speech=True,
+            synth_path=None
+        ))
+        pred_idx += 1
 
     return wordtokens
+
+
+def _words_match(word1, word2):
+    """
+    Check if two words match, handling common variations like:
+    - Case differences
+    - Punctuation
+    - Space combinations (e.g., "with in" vs "within")
+    """
+    # Normalize both words
+    norm1 = re.sub(r'[^\w]', '', word1.lower())
+    norm2 = re.sub(r'[^\w]', '', word2.lower())
+
+    # Direct match
+    if norm1 == norm2:
+        return True
+
+    # Check if one is a space-separated version of the other
+    spaced1 = re.sub(r'([a-z])([A-Z])', r'\1 \2', word1.lower()).replace(' ', '')
+    spaced2 = re.sub(r'([a-z])([A-Z])', r'\1 \2', word2.lower()).replace(' ', '')
+
+    return spaced1 == spaced2
+
+def format_text(text):
+    t = re.sub(r'[\.!\?,\'\"\*;:]+$', '', text).lower()
+    return t
