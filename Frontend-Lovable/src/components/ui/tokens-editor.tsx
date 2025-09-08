@@ -6,6 +6,8 @@ export interface TokenRowProps {
   tokens: WordToken[];
   /** Called whenever any token changes. */
   onChange?: (next: WordToken[]) => void;
+  /** Called when a token is selected/edited. Receives the token index or null if no token is selected. */
+  onTokenSelection?: (index: number | null) => void;
   className?: string;
 }
 
@@ -14,7 +16,7 @@ export interface TokenRowProps {
  * - Keeps array order stable.
  * - When a token's text changes, we also set `to_synth=true` if it differs from original.
  */
-export default function TokenEditor({ tokens, onChange, className }: TokenRowProps) {
+export default function TokenEditor({ tokens, onChange, onTokenSelection, className }: TokenRowProps) {
   const [newlyCreatedIndex, setNewlyCreatedIndex] = useState<number | null>(null);
   const tokenRefs = useRef<(EditableWordTokenRef | null)[]>([]);
   
@@ -33,6 +35,13 @@ export default function TokenEditor({ tokens, onChange, className }: TokenRowPro
       const next = tokens.filter((_, i) => i !== index);
       onChange?.(next);
     }
+    // Notify that no token is selected when blur occurs
+    onTokenSelection?.(null);
+  };
+
+  const handleTokenFocus = (index: number) => () => {
+    // Notify that this token is now selected
+    onTokenSelection?.(index);
   };
 
   const createEmptyToken = (index: number): WordToken => {
@@ -93,6 +102,7 @@ export default function TokenEditor({ tokens, onChange, className }: TokenRowPro
             token={t} 
             onChange={handleTokenChange(i)} 
             onBlur={handleTokenBlur(i)}
+            onFocus={handleTokenFocus(i)}
           />
           <TokenSeparator onInsertToken={() => handleInsertToken(i + 1)} />
         </React.Fragment>

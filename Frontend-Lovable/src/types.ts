@@ -9,6 +9,7 @@ export type WordToken = {
   to_synth: boolean;
   is_speech: boolean;
   synth_path?: string | null; // may be absent or null
+  toggle_on: boolean;
 };
 
 export type Segment = {
