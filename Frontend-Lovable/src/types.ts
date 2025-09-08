@@ -10,3 +10,15 @@ export type WordToken = {
   is_speech: boolean;
   synth_path?: string | null; // may be absent or null
 };
+
+export type Segment = {
+  start: number;
+  end: number;
+  source: "orig" | "synth";
+  tokens: number[];
+  text: string;
+  src_start?: number | null;
+  src_end?: number | null;
+  overlap_in: number;
+  overlap_out: number;
+};
