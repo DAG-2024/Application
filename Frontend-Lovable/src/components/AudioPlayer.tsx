@@ -2,9 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Play, Pause } from "lucide-react";
+import type { Segment } from "@/types";
 
 interface AudioPlayerProps {
   src: string | null;
+  segments?: Segment[];
+  showSegments?: boolean;
 }
 
 const formatTime = (s: number) => {
@@ -16,7 +19,7 @@ const formatTime = (s: number) => {
   return `${m}:${sec}`;
 };
 
-export function AudioPlayer({ src }: AudioPlayerProps) {
+export function AudioPlayer({ src, segments, showSegments = false }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -24,6 +27,26 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Calculate segment positions for visualization
+  const segmentBars = useMemo(() => {
+    if (!showSegments || !segments || !duration || segments.length === 0) {
+      return [];
+    }
+
+    return segments.map((segment) => {
+      const startPercent = (segment.start / duration) * 100;
+      const endPercent = (segment.end / duration) * 100;
+      const width = endPercent - startPercent;
+      
+      return {
+        startPercent: Math.max(0, startPercent),
+        width: Math.max(0, Math.min(100 - startPercent, width)),
+        color: segment.source === "orig" ? "bg-green-500" : "bg-red-500",
+        source: segment.source
+      };
+    });
+  }, [segments, duration, showSegments]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -152,8 +175,20 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
             onClick={handleProgressClick}
             onMouseDown={handleProgressMouseDown}
           >
+            {/* Segment background bars */}
+            {showSegments && segmentBars.map((bar, index) => (
+              <div
+                key={index}
+                className={`absolute top-0 h-full rounded-full opacity-30 ${bar.color}`}
+                style={{
+                  left: `${bar.startPercent}%`,
+                  width: `${bar.width}%`
+                }}
+              />
+            ))}
+            {/* Progress bar */}
             <div 
-              className="absolute top-0 left-0 h-full bg-primary rounded-full transition-all duration-100"
+              className="absolute top-0 left-0 h-full bg-primary/35 rounded-full transition-all duration-100"
               style={{ width: `${progress}%` }}
             />
             {/* Circular thumb at the end of progress */}

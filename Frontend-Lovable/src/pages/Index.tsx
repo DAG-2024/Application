@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { RotateCcw, Loader2, Download } from "lucide-react";
-import type { WordToken } from "@/types";
+import type { WordToken, Segment } from "@/types";
 import TokenEditor from "@/components/ui/tokens-editor";
 
 const Index = () => {
@@ -14,6 +14,7 @@ const Index = () => {
   const [isGeneratingTranscription, setIsGeneratingTranscription] = useState(false);
   const [isProcessingAudio, setIsProcessingAudio] = useState(false);
   const [finalAudioUrl, setFinalAudioUrl] = useState<string | null>(null);
+  const [segments, setSegments] = useState<Segment[]>([]);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -143,8 +144,11 @@ const Index = () => {
       
       // Extract the fixed audio URL from the response
       const fixedUrl = data.fixed_url;
-      const segments = data.segments;
-      console.log(segments);
+      const responseSegments = data.segments;
+      console.log(responseSegments);
+      
+      // Set the segments state
+      setSegments(responseSegments || []);
       // The backend returns file:// URLs, but we need to serve them properly
       // Convert file:// URLs to a proper endpoint that serves the audio files
       let processedUrl = fixedUrl;
@@ -274,7 +278,7 @@ const Index = () => {
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                   </div>
                 ) : (
-                  <AudioPlayer src={finalAudioUrl} />
+                  <AudioPlayer src={finalAudioUrl} segments={segments} showSegments={true} />
                 )}
               </div>
               {finalAudioUrl && !isProcessingAudio ? (
