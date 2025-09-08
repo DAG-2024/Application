@@ -86,7 +86,21 @@ def load_whisper_words(whisper_json: Dict[str, Any]) -> List[Word]:
             words.append(Word(text=text.strip(), start=start, end=end, confidence=conf))
     return words
 
+def split_hyphenated_words(words: List[Word]) -> List[Word]:
+    result = []
+    for word in words:
+        if "-" in word.text:
+            parts = word.text.split("-")
+            duration = word.end - word.start
+            half = duration / len(parts)
 
+            for i, part in enumerate(parts):
+                start_time = word.start + i * half
+                end_time = start_time + half
+                result.append(Word(text=part, start=start_time, end=end_time, confidence=word.confidence))
+        else:
+            result.append(word)
+    return result
 # ------------------------------------------------------------
 # Adapter: context anomalies + [blank] replacement/insertion
 # ------------------------------------------------------------
@@ -132,6 +146,8 @@ def build_word_tokens_of_detection(
         else:
             whisper_json = whisper_json_or_path
         words = load_whisper_words(whisper_json)
+
+        words = split_hyphenated_words(words)
 
         # --- 3) Prepare anomaly index sets ---
         word_anom: Set[int] = set(int(i) for i in (anomaly_word_idx or []))
