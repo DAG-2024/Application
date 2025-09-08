@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import shutil
 from typing import List
 import re
+import unicodedata
+
 import uvicorn
 
 
@@ -168,7 +170,8 @@ def segments_to_transcription(data):
     for segment in data.get('segments', []):
         for word_info in segment.get('words', []):
             words.append(word_info['word'])
-    return ' '.join(words)
+    res = ' '.join(words)
+    return res.replace("-"," ")
 
 def indexed_transcription_str(text):
 
@@ -267,8 +270,20 @@ def insert_blank_and_modify_timestamp(whisper_res, indexes):
         # Optional: skip edge cases (first or last word) silently
     return all_words
 
+
+
+def _norm(token: str) -> str:
+    """Lowercase + NFKC normalize + strip common trailing punctuation."""
+    if token is None:
+        return ""
+    t = unicodedata.normalize("NFKC", token).strip().lower()
+    # remove only trailing punctuation (same family as original, but normalized)
+    t = re.sub(r'[\.!\?,;:]+$', '', t)
+    return t
+
 def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
-    pred_words = predicted_text.strip().split()
+    # tokenize as before (keep behavior), but comparisons use _norm()
+    pred_words = re.split(r"[ \-]+", predicted_text.strip())
 
     wordtokens = []
     orig_idx = 0
@@ -282,10 +297,17 @@ def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
                 if pre_tokens[j].text != '[blank]':
                     next_non_blank = pre_tokens[j].text
                     break
+
+            next_non_blank_norm = _norm(next_non_blank) if next_non_blank is not None else None
+
             phrase = []
-            while pred_idx < len(pred_words) and (next_non_blank is None or pred_words[pred_idx] != next_non_blank):
+            # consume predicted until we hit the next non-blank (normalized comparison!)
+            while pred_idx < len(pred_words) and (
+                next_non_blank_norm is None or _norm(pred_words[pred_idx]) != next_non_blank_norm
+            ):
                 phrase.append(pred_words[pred_idx])
                 pred_idx += 1
+
             for word in phrase:
                 wordtokens.append(WordToken(
                     start=w.start,
@@ -297,8 +319,8 @@ def align_blanks_and_predicted(pre_tokens: List[WordToken], predicted_text):
                 ))
             orig_idx += 1
         else:
-            # If the predicted word matches, consume it
-            if pred_idx < len(pred_words) and re.sub(r'[\.!\?,;:]+$', '', pred_words[pred_idx]) == re.sub(r'[\.!\?,;:]+$', '', w.text):
+            # If the predicted word matches (normalized, consistent with blank path), consume it
+            if pred_idx < len(pred_words) and _norm(pred_words[pred_idx]) == _norm(w.text):
                 wordtokens.append(WordToken(
                     start=w.start,
                     end=w.end,
