@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { RotateCcw, Loader2, Download } from "lucide-react";
@@ -15,6 +16,7 @@ const Index = () => {
   const [isProcessingAudio, setIsProcessingAudio] = useState(false);
   const [finalAudioUrl, setFinalAudioUrl] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
+  const [selectedTokenIndex, setSelectedTokenIndex] = useState<number | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -77,6 +79,7 @@ const Index = () => {
         original_text: t.original_text ?? t.text,
         isEdited: false,
         predicted: t.to_synth,
+        toggle_on: t.to_synth,
       }));
 
       setTranscriptionResults(normalized);
@@ -94,6 +97,24 @@ const Index = () => {
       });
     } finally {
       setIsGeneratingTranscription(false);
+    }
+  };
+
+  const handleTokenSelection = (index: number | null) => {
+    setSelectedTokenIndex(index);
+  };
+
+  const handleToggleChange = (checked: boolean) => {
+    if (selectedTokenIndex !== null) {
+      const updatedTokens = [...transcriptionResults];
+      updatedTokens[selectedTokenIndex] = {
+        ...updatedTokens[selectedTokenIndex],
+        toggle_on: checked,
+        to_synth: updatedTokens[selectedTokenIndex].predicted || 
+                 updatedTokens[selectedTokenIndex].isEdited || 
+                 checked
+      };
+      setTranscriptionResults(updatedTokens);
     }
   };
 
@@ -124,10 +145,11 @@ const Index = () => {
         start: token.start,
         end: token.end,
         text: token.text,
-        to_synth: token.to_synth,
+        to_synth: token.toggle_on || token.isEdited,
         is_speech: token.is_speech || true,
         synth_path: token.synth_path || null
       })));
+      console.log(payload);
       
       formData.append("payload", payload);
 
@@ -175,6 +197,7 @@ const Index = () => {
       setIsProcessingAudio(false);
     }
   };
+  
 
   return (
     <div>
@@ -217,11 +240,63 @@ const Index = () => {
           <h2 id="tokens-heading" className="sr-only">Token editor</h2>
           <div className="rounded-lg border bg-card p-4 shadow-elegant">
             {transcriptionResults.length > 0 ? (
-              <TokenEditor
-                tokens={transcriptionResults}
-                onChange={setTranscriptionResults}
-              />
-              
+              <>
+                <TokenEditor
+                  tokens={transcriptionResults}
+                  onChange={setTranscriptionResults}
+                  onTokenSelection={handleTokenSelection}
+                />
+                
+                {/* Toggle component for selected token */}
+                <div 
+                  className="mt-4 flex items-center gap-3 p-3 bg-muted/50 rounded-lg"
+                  onMouseDown={(e) => {
+                    // Prevent the mousedown event from causing the token to lose focus
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                >
+                  <label 
+                    htmlFor="token-toggle" 
+                    className={`text-sm font-medium ${
+                      selectedTokenIndex !== null && transcriptionResults[selectedTokenIndex]?.isEdited === true 
+                        ? 'text-muted-foreground' 
+                        : ''
+                    }`}
+                    onMouseDown={(e) => {
+                      // Prevent the mousedown event from causing the token to lose focus
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  >
+                    Enable synthesis for selected token:
+                    {selectedTokenIndex !== null && transcriptionResults[selectedTokenIndex]?.isEdited === true && (
+                      <span className="ml-2 text-xs text-muted-foreground">(auto-enabled - token is edited)</span>
+                    )}
+                  </label>
+                  <Switch
+                    id="token-toggle"
+                    checked={selectedTokenIndex !== null ? 
+                      (transcriptionResults[selectedTokenIndex]?.isEdited === true ? true : transcriptionResults[selectedTokenIndex]?.toggle_on || false) 
+                      : false}
+                    onCheckedChange={handleToggleChange}
+                    disabled={selectedTokenIndex === null || (selectedTokenIndex !== null && transcriptionResults[selectedTokenIndex]?.isEdited === true)}
+                    onMouseDown={(e) => {
+                      // Prevent the mousedown event from causing the token to lose focus
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  />
+                  {selectedTokenIndex !== null && (
+                    <span className="text-xs text-muted-foreground">
+                      Token: "{transcriptionResults[selectedTokenIndex]?.text}"
+                      {transcriptionResults[selectedTokenIndex]?.isEdited && (
+                        <span className="ml-1 text-blue-600">(edited)</span>
+                      )}
+                    </span>
+                  )}
+                </div>
+              </>
             ) : (
               <p className="text-sm text-muted-foreground">
                 Upload an audio file and generate a transcription that you can edit.

@@ -10,6 +10,7 @@ export type WordToken = {
   to_synth: boolean;
   is_speech: boolean;
   synth_path?: string | null;
+  toggle_on: boolean;
 };
 
 export interface EditableWordTokenProps {
@@ -18,6 +19,8 @@ export interface EditableWordTokenProps {
   onChange?: (next: WordToken) => void;
   /** Called when the token loses focus (onBlur). Receives the current token. */
   onBlur?: (token: WordToken) => void;
+  /** Called when the token gains focus. */
+  onFocus?: () => void;
   className?: string;
   /** If true, disallow spaces/newlines inside the token. Default: true */
   singleWord?: boolean;
@@ -39,6 +42,7 @@ const EditableWordToken = forwardRef<EditableWordTokenRef, EditableWordTokenProp
   token,
   onChange,
   onBlur,
+  onFocus,
   className,
   singleWord = true,
 }, forwardedRef) => {
@@ -50,7 +54,7 @@ const EditableWordToken = forwardRef<EditableWordTokenRef, EditableWordTokenProp
       ...token,
       text: token.text,
       isEdited: hasChanged,
-      to_synth: token.predicted || hasChanged,
+      to_synth: token.predicted || hasChanged || token.toggle_on,
       
     };
     onChange?.(next);
@@ -102,6 +106,10 @@ const EditableWordToken = forwardRef<EditableWordTokenRef, EditableWordTokenProp
     onBlur?.(token);
   };
 
+  const handleFocus: React.FocusEventHandler<HTMLSpanElement> = () => {
+    onFocus?.();
+  };
+
   // Ensure DOM reflects the current controlled text
   useEffect(() => {
     if (internalRef.current && (internalRef.current.innerText ?? "") !== token.text) {
@@ -118,9 +126,10 @@ const EditableWordToken = forwardRef<EditableWordTokenRef, EditableWordTokenProp
       onInput={handleInput}
       onKeyDown={handleKeyDown}
       onBlur={handleBlur}
+      onFocus={handleFocus}
       className={[
         "inline-block rounded-md px-0.5",
-        token.isEdited ? "text-blue-600 bg-blue-50" : token.predicted ? "text-green-600 bg-green-50" : "text-black",
+        token.isEdited ? "text-blue-600 bg-blue-50" : token.predicted ? "text-green-600 bg-green-50" : token.toggle_on ? "text-red-600 bg-red-50" : "text-black",
         token.text === "" ? "min-w-[2ch]" : "",
         className || "",
       ].join(" ")}
